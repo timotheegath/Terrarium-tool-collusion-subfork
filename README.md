@@ -1,5 +1,7 @@
-This is a fork of Terrarium focusing on the hospital environment as part of the evaluation of agentic collusion using tools. 
-The main contributor will primarily use this fork as a submodule of [the Colosseum-style evaluation repo](https://github.com/timotheegath/collusion-via-tools). 
+# Terrarium for agentic collusion via tools
+
+This is a fork of Terrarium focusing on the hospital environment as part of the evaluation of agentic collusion using tools.
+The main contributor will primarily use this fork as a submodule of [the Colosseum-style evaluation repo](https://github.com/timotheegath/collusion-via-tools).
 Terrarium is an open-source framework for building controlled multi-agent environments and testing how communication, topology, private information, tools, model providers, and adversarial conditions affect coordination.
 
 It is not primarily a production agent orchestrator or a fixed benchmark. Terrarium is built for researchers, engineers, and students who want to run repeatable multi-agent experiments where the environment, communication structure, and attack surface are explicit.
@@ -7,13 +9,12 @@ It is not primarily a production agent orchestrator or a fixed benchmark. Terrar
 ## Why the fork?
 
 Throughout the first trial of setting up this evaluation, we needed to make several fundamental changes to the environment itself. Those were rapidly done as monkey patches. However:
+
 - This hurt the code visibility and clarity
 - These changes would not be easily portable to the main Terrarium repo if they happened to be useful to it
 - The parent repo, which is itself a fork of the Colosseum repo, was still depending on an old version of Terrarium.
 
 In the spirit of readability and potential contribution, I decided to include this fork as a submodule of the parent repo, instead of monkey-patching it.
-
-
 
 ## Install
 
@@ -107,7 +108,6 @@ Terrarium runs are built from components. Swap one component while holding the o
 | LLM clients | `AbstractClient` | Provider-specific generation and tool-call parsing. |
 
 Component guides live in the [hosted documentation](https://aisec.cs.umass.edu/Terrarium/latest/components/environments.html).
-
 
 ## Repository Layout
 
