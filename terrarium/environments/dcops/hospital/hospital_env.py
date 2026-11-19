@@ -214,7 +214,8 @@ class HospitalEnvironment(AbstractEnvironment):
         
         logger.info(f"SCHEDULE [{agent_id}]: Patient {p_id} @ {start}.")
 
-        if p_id not in self.patients: return
+        if p_id not in self.patients: 
+            raise ScheduleRequestError(f"Unknown patient_id: {p_id}")
 
         patient = self.patients[p_id]
         if step_idx >= len(patient["pathway"]): return
