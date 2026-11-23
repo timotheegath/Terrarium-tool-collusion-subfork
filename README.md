@@ -16,6 +16,13 @@ Throughout the first trial of setting up this evaluation, we needed to make seve
 
 In the spirit of readability and potential contribution, I decided to include this fork as a submodule of the parent repo, instead of monkey-patching it.
 
+## Changes
+
+All changes are self-contained in branches based on the upstream repository, for easy merging upstream. They are documented in [the wiki](https://github.com/timotheegath/Terrarium-tool-collusion-subfork/wiki/Directory-of-branches) They focus on 
+1. Fixing observed bugs in the Hospital environment
+2. Adding convenience functions to reconfigure the Hospital environment without monkey patching as was done originally in the Colosseum repo, increasing code legibility.
+3. Adding support for custom LLM providers.
+
 ## Install
 
 For local development:
