@@ -20,15 +20,15 @@ class ResolvePhasesTests(unittest.TestCase):
         self.assertEqual(
             resolve_phases({"max_planning_rounds": 3}),
             [
-                {"name": "planning", "rounds": 3},
-                {"name": "execution", "rounds": 1},
+                {"name": "planning", "rounds": 3, "when": "each"},
+                {"name": "execution", "rounds": 1, "when": "each"},
             ],
         )
 
     def test_default_when_max_planning_rounds_missing_or_falsy(self):
         expected = [
-            {"name": "planning", "rounds": 1},
-            {"name": "execution", "rounds": 1},
+            {"name": "planning", "rounds": 1, "when": "each"},
+            {"name": "execution", "rounds": 1, "when": "each"},
         ]
         for simulation_config in (
             None,
@@ -45,12 +45,15 @@ class ResolvePhasesTests(unittest.TestCase):
             {"name": "critique", "rounds": 1},
             {"name": "execution", "rounds": 1},
         ]
-        self.assertEqual(resolve_phases({"phases": phases}), phases)
+        resolved = resolve_phases({"phases": phases})
+        self.assertEqual([p["name"] for p in resolved], ["planning", "critique", "execution"])
+        self.assertEqual([p["rounds"] for p in resolved], [2, 1, 1])
+        self.assertTrue(all(p["when"] == "each" for p in resolved))
 
     def test_explicit_phases_normalize_name_and_rounds(self):
         self.assertEqual(
             resolve_phases({"phases": [{"name": " review ", "rounds": "2"}]}),
-            [{"name": "review", "rounds": 2}],
+            [{"name": "review", "rounds": 2, "when": "each"}],
         )
 
     def test_invalid_phase_entries_raise_value_error(self):

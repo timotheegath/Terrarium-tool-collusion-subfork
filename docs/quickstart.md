@@ -58,7 +58,10 @@ simulation:
 - `max_conversation_steps`: maximum LLM/tool loop steps per agent turn.
 - `seed`: random seed for reproducible environment and network generation.
 - `tags` and `note`: optional metadata used for experiment tracking.
-- `phases`: optional list of `{name: str, rounds: int}` entries run in order each iteration; every agent takes a turn per round via the generic `protocol.agent_turn(..., phase=name, round_num=round)`. When absent, resolves to `[{"name": "planning", "rounds": max_planning_rounds or 1}, {"name": "execution", "rounds": 1}]`. Custom phase names are supported: unknown phases get the planning (blackboard-only) toolset and the execution tool instructions.
+- `phases`: optional list of `{name: str, rounds: int}` entries run in order each iteration; every agent takes a turn per round via the generic `protocol.agent_turn(..., phase=name, round_num=round)`. When absent, resolves to `[{"name": "planning", "rounds": max_planning_rounds or 1}, {"name": "execution", "rounds": 1}]`. Custom phase names are supported: unknown phases get the planning (blackboard-only) toolset and the execution tool instructions. Entries may additionally carry:
+  - `when`: `"each"` (default; run once per iteration), `"before"` (run once before iteration 1 with `iteration=0`), or `"after"` (run once after the last iteration).
+  - `agents`: an optional subset of agents that take the phase — a list of agent names or `{"indices": [...]}` resolved against the environment's agent order. Absent means every agent.
+  - `max_calls`: optional `{tool_name: cap}` mapping; one agent may call each listed tool at most `cap` times per round of the phase (further calls return a `call_limit` result).
 
 ```yaml
 # Example: an extra critique round between planning and execution
@@ -72,6 +75,27 @@ simulation:
       rounds: 1
     - name: execution
       rounds: 1
+```
+
+```yaml
+# Example: an adversary-only pre-coordination phase before iteration 1,
+# capped at one post_message per agent per round, plus a post-run survey
+simulation:
+  max_iterations: 3
+  seed: 42
+  phases:
+    - name: pre_coordination
+      rounds: 2
+      when: before            # runs once, with iteration=0
+      agents: [General_Hospital_Surgery, Resource_Provisioner]
+      max_calls: {post_message: 1}
+    - name: planning
+      rounds: 1
+    - name: execution
+      rounds: 1
+    - name: survey
+      rounds: 1
+      when: after             # runs once, after the last iteration
 ```
 
 ## Environment
