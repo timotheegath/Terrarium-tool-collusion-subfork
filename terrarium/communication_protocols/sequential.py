@@ -11,10 +11,21 @@ from terrarium.tools.environment import (
     EnvironmentToolsNotFoundError,
     instantiate_environment_tools,
 )
-from terrarium.tools.gates import blocked_response, tool_blocked
+from terrarium.tools.gates import (
+    blocked_response,
+    call_limit_response,
+    secret_channel_rewrite,
+    tool_blocked,
+)
 from terrarium.core.logger import BlackboardLogger
 from terrarium.compaction import compact_events, CompactionLogger
-from terrarium.utils import get_client_instance, get_generation_params, get_model_name
+from terrarium.utils import (
+    get_client_instance,
+    get_generation_params,
+    get_model_name,
+    phase_max_calls,
+    resolve_phases,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +88,10 @@ class SequentialCommunicationProtocol(BaseCommunicationProtocol):
         self._compaction_client = None
         self._compaction_model_name: Optional[str] = None
         self._compaction_params: Dict[str, Any] = {}
+        # Per-turn state for `simulation.phases[].max_calls` caps: the current
+        # (agent, phase, round) key plus a call counter per tool.
+        self._current_turn_key: Optional[tuple] = None
+        self._tool_call_counts: Dict[tuple, Dict[str, int]] = {}
 
     def _get_compaction_client_and_model(self):
         llm_config = self.config.get("llm") or {}
@@ -159,6 +174,30 @@ class SequentialCommunicationProtocol(BaseCommunicationProtocol):
                 blackboard, iteration, phase, agent_name, planning_round
             )
 
+    def _check_call_cap(
+        self, tool_name: str, agent_name: str, phase: Optional[str]
+    ) -> Optional[Dict[str, Any]]:
+        """Enforce `simulation.phases[].max_calls` for the current turn.
+
+        Returns a call-limit rejection dict when the agent has already made
+        ``cap`` calls of ``tool_name`` in the current (phase, round), else None.
+        """
+        turn_key = getattr(self, "_current_turn_key", None)
+        if turn_key is None or phase is None:
+            return None
+        sim_config = getattr(self, "simulation_config", None) or {}
+        caps = phase_max_calls(resolve_phases(sim_config), phase)
+        cap = caps.get(tool_name)
+        if cap is None:
+            return None
+        key = (turn_key[0], phase, turn_key[2])
+        counts = self._tool_call_counts.setdefault(key, {})
+        already = counts.get(tool_name, 0)
+        if already >= cap:
+            return call_limit_response(tool_name, phase, cap, already)
+        counts[tool_name] = already + 1
+        return None
+
     async def environment_handle_tool_call(
         self,
         tool_name,
@@ -168,6 +207,9 @@ class SequentialCommunicationProtocol(BaseCommunicationProtocol):
         iteration: Optional[int] = None,
     ) -> Dict[str, Any]:
         self._ensure_environment_tools_initialized()
+        limit_hit = self._check_call_cap(tool_name, agent_name, phase)
+        if limit_hit is not None:
+            return limit_hit
         response = self.environment_tools.handle_tool_call(
             tool_name, agent_name, arguments, phase, iteration
         )
@@ -181,8 +223,16 @@ class SequentialCommunicationProtocol(BaseCommunicationProtocol):
         phase: Optional[str] = None,
         iteration: Optional[int] = None,
     ) -> Dict[str, Any]:
-        if tool_blocked(self.environment, tool_name, phase):
+        if tool_blocked(self.environment, tool_name, phase, agent_name):
             return blocked_response(tool_name, phase)
+        limit_hit = self._check_call_cap(tool_name, agent_name, phase)
+        if limit_hit is not None:
+            return limit_hit
+        if tool_name == "post_message":
+            enforced = secret_channel_rewrite(self.environment, agent_name, phase)
+            if enforced is not None:
+                arguments = dict(arguments)
+                arguments["blackboard_id"] = enforced
         response = self.megaboard.handle_tool_call(
             tool_name, agent_name, arguments, phase, iteration
         )
@@ -297,6 +347,15 @@ class SequentialCommunicationProtocol(BaseCommunicationProtocol):
         """
         self.environment = environment
         self._ensure_environment_tools_initialized()
+        # Let the agent's toolset discovery honour per-agent blocked_tools.
+        discovery = getattr(agent, "toolset_discovery", None)
+        if discovery is not None and hasattr(discovery, "bind_environment"):
+            discovery.bind_environment(environment)
+        self._current_turn_key = (
+            agent_name,
+            phase,
+            round_num if round_num is not None else -abs(int(iteration or 0)),
+        )
         blackboard_contexts = await self._prefetch_blackboard_events(
             agent_name,
             phase=phase,
