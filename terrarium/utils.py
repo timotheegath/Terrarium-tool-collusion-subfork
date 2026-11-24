@@ -209,8 +209,19 @@ def resolve_phases(simulation_config: Optional[Dict[str, Any]]) -> List[Dict[str
     Resolve the phase sequence a simulation runs per iteration.
 
     Reads ``simulation.phases`` — a list of ``{"name": str, "rounds": int}`` entries
-    executed in order, each running ``rounds`` rounds over all agents. When the key
-    is absent, falls back to the legacy hardcoded sequence derived from
+    executed in order, each running ``rounds`` rounds over all agents. Entries may
+    additionally carry:
+
+    - ``when``: ``"each"`` (default; run once per iteration), ``"before"`` (run once
+      before iteration 1, with ``iteration=0``), or ``"after"`` (run once after the
+      last iteration).
+    - ``agents``: optional subset of agents that take the phase — a list of agent
+      names or ``{"indices": [...]}`` resolved against the environment's agent order
+      (see :func:`resolve_phase_agents`). Absent means all agents.
+    - ``max_calls``: optional ``{tool_name: cap}`` mapping limiting how many times one
+      agent may call each listed tool within a single round of the phase.
+
+    When the key is absent, falls back to the legacy hardcoded sequence derived from
     ``simulation.max_planning_rounds``:
     ``[{"name": "planning", "rounds": max_planning_rounds or 1},
        {"name": "execution", "rounds": 1}]``.
@@ -234,8 +245,8 @@ def resolve_phases(simulation_config: Optional[Dict[str, Any]]) -> List[Dict[str
     if raw_phases is None:
         planning_rounds = int(simulation_config.get("max_planning_rounds") or 1)
         return [
-            {"name": "planning", "rounds": planning_rounds},
-            {"name": "execution", "rounds": 1},
+            {"name": "planning", "rounds": planning_rounds, "when": "each"},
+            {"name": "execution", "rounds": 1, "when": "each"},
         ]
 
     if not isinstance(raw_phases, list) or not raw_phases:
@@ -257,13 +268,152 @@ def resolve_phases(simulation_config: Optional[Dict[str, Any]]) -> List[Dict[str
                 f"simulation.phases[{index}].name must be a non-empty string, "
                 f"got {name!r}"
             )
-        phases.append(
-            {
-                "name": name.strip(),
-                "rounds": _coerce_phase_rounds(entry.get("rounds"), index),
-            }
-        )
+        phase: Dict[str, Any] = {
+            "name": name.strip(),
+            "rounds": _coerce_phase_rounds(entry.get("rounds"), index),
+        }
+        # Optional placement: "each" (default) runs per iteration, "before"
+        # runs once before iteration 1 with iteration=0, "after" runs once
+        # after the last iteration.
+        when = entry.get("when", "each")
+        if when is None:
+            when = "each"
+        when = str(when).strip().lower()
+        if when not in ("each", "before", "after"):
+            raise ValueError(
+                f"simulation.phases[{index}].when must be 'each', 'before' or "
+                f"'after', got {entry.get('when')!r}"
+            )
+        phase["when"] = when
+        # Optional agent subset: a list of agent names, or {"indices": [...]}
+        # resolved against the environment's agent order (see
+        # resolve_phase_agents). Absent means every agent takes the phase.
+        if "agents" in entry and entry["agents"] is not None:
+            phase["agents"] = _coerce_phase_agents(entry["agents"], index)
+        # Optional per-agent, per-round tool-call cap for this phase:
+        # {"post_message": 2} rejects further calls of that tool by one agent
+        # within a single round of the phase.
+        if "max_calls" in entry and entry["max_calls"] is not None:
+            phase["max_calls"] = _coerce_phase_max_calls(entry["max_calls"], index)
+        phases.append(phase)
     return phases
+
+
+_PHASE_WHEN_ORDER = ("before", "each", "after")
+
+
+def _coerce_phase_agents(value: Any, index: int) -> Any:
+    """Validate a `simulation.phases[i].agents` entry.
+
+    Accepts a list of agent names or ``{"indices": [int, ...]}`` (resolved
+    later against the environment's agent order). Returns the value verbatim
+    after validation.
+    """
+    if isinstance(value, dict):
+        indices = value.get("indices")
+        if not isinstance(indices, (list, tuple)) or not indices:
+            raise ValueError(
+                f"simulation.phases[{index}].agents.indices must be a non-empty "
+                f"list of integer indices, got {indices!r}"
+            )
+        for idx in indices:
+            if isinstance(idx, bool) or not isinstance(idx, int) or idx < 0:
+                raise ValueError(
+                    f"simulation.phases[{index}].agents.indices entries must be "
+                    f"non-negative integers, got {idx!r}"
+                )
+        return {"indices": [int(i) for i in indices]}
+    if isinstance(value, (list, tuple)):
+        names = [str(v) for v in value]
+        if not names or any(not n.strip() for n in names):
+            raise ValueError(
+                f"simulation.phases[{index}].agents must be a non-empty list of "
+                f"agent names, got {value!r}"
+            )
+        return names
+    raise ValueError(
+        f"simulation.phases[{index}].agents must be a list of agent names or "
+        f"{{'indices': [...]}} , got {value!r}"
+    )
+
+
+def _coerce_phase_max_calls(value: Any, index: int) -> Dict[str, int]:
+    """Validate a `simulation.phases[i].max_calls` mapping of tool -> cap."""
+    if not isinstance(value, dict) or not value:
+        raise ValueError(
+            f"simulation.phases[{index}].max_calls must be a non-empty mapping "
+            f"of tool name to a positive integer cap, got {value!r}"
+        )
+    out: Dict[str, int] = {}
+    for tool, cap in value.items():
+        if isinstance(cap, bool) or not isinstance(cap, int) or cap < 1:
+            raise ValueError(
+                f"simulation.phases[{index}].max_calls[{tool!r}] must be a "
+                f"positive integer, got {cap!r}"
+            )
+        out[str(tool)] = int(cap)
+    return out
+
+
+def resolve_phase_agents(
+    phase: Dict[str, Any], agent_names: List[str]
+) -> Optional[List[str]]:
+    """Resolve a phase entry's `agents` key against the environment's agents.
+
+    Returns ``None`` when the phase has no `agents` key (every agent takes the
+    phase), otherwise the ordered list of agent names that take it. Name lists
+    must reference known agents; ``{"indices": [...]}`` are resolved against
+    ``agent_names`` order. Unknown names / out-of-range indices raise
+    ``ValueError``.
+    """
+    spec = phase.get("agents")
+    if spec is None:
+        return None
+    if isinstance(spec, dict):
+        indices = spec.get("indices", [])
+        names = []
+        for idx in indices:
+            if idx >= len(agent_names):
+                raise ValueError(
+                    f"simulation.phases entry {phase.get('name')!r} references "
+                    f"agent index {idx} but only {len(agent_names)} agents exist: "
+                    f"{agent_names}"
+                )
+            names.append(agent_names[idx])
+        return names
+    known = set(agent_names)
+    unknown = [n for n in spec if n not in known]
+    if unknown:
+        raise ValueError(
+            f"simulation.phases entry {phase.get('name')!r} references unknown "
+            f"agents {unknown}; known agents: {list(agent_names)}"
+        )
+    # Preserve the environment's agent order for the subset.
+    return [n for n in agent_names if n in set(spec)]
+
+
+def split_phases_by_when(
+    phases: List[Dict[str, Any]],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Split resolved phase entries by their `when` placement.
+
+    Returns ``{"before": [...], "each": [...], "after": [...]}`` preserving the
+    configured order within each group.
+    """
+    out: Dict[str, List[Dict[str, Any]]] = {w: [] for w in _PHASE_WHEN_ORDER}
+    for phase in phases:
+        out[str(phase.get("when") or "each")].append(phase)
+    return out
+
+
+def phase_max_calls(phases: List[Dict[str, Any]], phase_name: str) -> Dict[str, int]:
+    """Return the `max_calls` mapping configured for ``phase_name`` (or {})."""
+    for phase in phases:
+        if phase.get("name") == phase_name:
+            caps = phase.get("max_calls")
+            if isinstance(caps, dict):
+                return dict(caps)
+    return {}
 
 
 def validate_config(config: Dict[str, Any]) -> None:
