@@ -72,8 +72,11 @@ class BaseCommunicationProtocol(ABC):
         iteration: int,
         phase: str,
         round_num: Optional[int] = None,
-    ) -> None:
-        """Handle a single agent turn in the given phase (generic, config-driven)."""
+    ) -> Any:
+        """Handle a single agent turn in the given phase (generic, config-driven).
+
+        Returns the agent's response dict from ``agent.generate_response``.
+        """
         raise NotImplementedError
 
     @abstractmethod

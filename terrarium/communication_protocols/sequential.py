@@ -337,13 +337,13 @@ class SequentialCommunicationProtocol(BaseCommunicationProtocol):
         iteration: int,
         phase: str,
         round_num: Optional[int] = None,
-    ):
+    ) -> Any:
         """Handle a single agent turn in the given phase.
 
         Generic turn used for every phase of the config-driven phase sequence
         (see ``simulation.phases``). ``round_num`` is forwarded to the agent as
         the planning round; when None it is left at the agent's default (the
-        execution-phase behavior).
+        execution-phase behavior). Returns the agent's response dict.
         """
         self.environment = environment
         self._ensure_environment_tools_initialized()
@@ -368,7 +368,7 @@ class SequentialCommunicationProtocol(BaseCommunicationProtocol):
         generate_kwargs: Dict[str, Any] = {}
         if round_num is not None:
             generate_kwargs["round_num"] = round_num
-        await agent.generate_response(
+        response = await agent.generate_response(
             agent_name=agent_name,
             agent_context=agent_context,
             blackboard_context=blackboard_contexts,
@@ -385,6 +385,7 @@ class SequentialCommunicationProtocol(BaseCommunicationProtocol):
             agent_name=agent_name,
             planning_round=round_num,
         )
+        return response
 
     async def agent_planning_turn(
         self,
