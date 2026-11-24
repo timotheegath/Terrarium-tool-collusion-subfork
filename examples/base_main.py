@@ -29,7 +29,9 @@ from terrarium.utils import (
     build_vllm_runtime,
     get_generation_params,
     prepare_simulation_config,
+    resolve_phase_agents,
     resolve_phases,
+    split_phases_by_when,
 )
 import asyncio
 from terrarium.core.logger import ToolCallLogger, AgentTrajectoryLogger
@@ -99,25 +101,44 @@ async def run_simulation(config: Dict[str, Any]) -> bool:
 
         max_iterations = config["simulation"].get("max_iterations", 1)
         phases = resolve_phases(config["simulation"])
+        phase_groups = split_phases_by_when(phases)
+
+        async def run_phase_group(group, iteration):
+            """Run every phase in ``group`` once at ``iteration`` (each phase's own rounds)."""
+            for phase in group:
+                phase_name = phase["name"]
+                phase_rounds = phase["rounds"]
+                phase_agent_names = resolve_phase_agents(phase, [a.name for a in environment.agents])
+                phase_agents = (
+                    environment.agents
+                    if phase_agent_names is None
+                    else [a for a in environment.agents if a.name in set(phase_agent_names)]
+                )
+                for round_num in tqdm(range(1, phase_rounds + 1), desc=f"  {phase_name.capitalize()}", position=1, leave=False, ncols=80):
+                    # Use consistent agent order for this iteration
+                    for agent in tqdm(phase_agents, desc="       Agents", position=2, leave=False, ncols=80):
+                        agent_context = environment.build_agent_context(agent.name, phase=phase_name, iteration=iteration, planning_round=round_num)
+                        await communication_protocol.agent_turn(agent, agent.name, agent_context, environment, iteration, phase=phase_name, round_num=round_num)
+
         try:
             with logging_redirect_tqdm():
+                # "before" phases: once, before iteration 1, with iteration=0.
+                for phase in phase_groups["before"]:
+                    logging.info(f"Running pre-iteration phase '{phase['name']}' (iteration=0)")
+                await run_phase_group(phase_groups["before"], iteration=0)
                 # Main iteration
+                current_iteration = 0
                 for iteration in tqdm(range(1, max_iterations + 1), desc="Iterations", position=0, leave=True, ncols=80):
                     current_iteration = iteration
                     if environment.done(current_iteration):
                         logging.info(f"Environment requested simulation stop at iteration {current_iteration}")
                         break
                     # Config-driven phase sequence (default: planning, then execution)
-                    for phase in phases:
-                        phase_name = phase["name"]
-                        phase_rounds = phase["rounds"]
-                        for round_num in tqdm(range(1, phase_rounds + 1), desc=f"  {phase_name.capitalize()}", position=1, leave=False, ncols=80):
-                            # Use consistent agent order for this iteration
-                            for agent in tqdm(environment.agents, desc="       Agents", position=2, leave=False, ncols=80):
-                                agent_context = environment.build_agent_context(agent.name, phase=phase_name, iteration=iteration, planning_round=round_num)
-                                await communication_protocol.agent_turn(agent, agent.name, agent_context, environment, iteration, phase=phase_name, round_num=round_num)
+                    await run_phase_group(phase_groups["each"], iteration=current_iteration)
 
                     environment.log_iteration_summary(current_iteration)
+                # "after" phases: once, after the last iteration that ran.
+                await run_phase_group(phase_groups["after"], iteration=max(1, current_iteration))
                 environment.generate_final_summary()
         finally:
             if provider == "vllm" and vllm_runtime:
