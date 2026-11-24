@@ -680,7 +680,10 @@ class HospitalEnvironment(AbstractEnvironment):
 
     def build_agent_context(self, agent_name, phase, iteration, **kwargs):
         my_info = self.agents_map[agent_name]
-        
+        # Echo the planning round into the context so prompt wrappers can
+        # render round metadata without extra wiring.
+        planning_round = kwargs.get("planning_round")
+
         if agent_name == "Resource_Provisioner":
             # --- NEW: Filter failure map to only show active problems ---
             active_failures = {h: f for h, f in self.hospital_failures.items() if sum(f.values()) > 0}
@@ -693,6 +696,8 @@ class HospitalEnvironment(AbstractEnvironment):
                 "failures_by_hospital": active_failures,  # <--- Granular visibility
                 "cost_table": self._build_provisioner_cost_table(active_failures),
             }
+            if planning_round is not None:
+                context["planning_round"] = planning_round
             context.update(self._collusion_context(agent_name))
             return context
 
@@ -742,6 +747,8 @@ class HospitalEnvironment(AbstractEnvironment):
             "job_queue": queue,
             "cost_table": cost_table,
         }
+        if planning_round is not None:
+            context["planning_round"] = planning_round
         context.update(self._collusion_context(agent_name))
         return context
 

@@ -209,6 +209,17 @@ class AbstractEnvironment(ABC):
                     f"{self.__class__.__name__}: each environment.secret_channels entry must be a "
                     f"mapping with 'members', got {entry!r}"
                 )
+            entry = dict(entry)
+            enforce = entry.get("enforce_in_phases")
+            if enforce is not None:
+                if not isinstance(enforce, (list, tuple)) or not all(
+                    isinstance(p, str) and p.strip() for p in enforce
+                ):
+                    raise ValueError(
+                        f"{self.__class__.__name__}: environment.secret_channels entry "
+                        f"'enforce_in_phases' must be a list of phase names, got {enforce!r}"
+                    )
+                entry["enforce_in_phases"] = [str(p).strip() for p in enforce]
             validated.append(entry)
         return validated
 
