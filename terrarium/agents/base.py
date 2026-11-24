@@ -9,6 +9,24 @@ from terrarium.llm.clients.abstract_client import AbstractClient
 from terrarium.tools.discovery import ToolsetDiscovery
 from terrarium.core.async_utils import run_blocking
 
+
+def _call_with_agent_name(fn: Callable, agent_name: Optional[str], *args: Any, **kwargs: Any) -> Any:
+    """Call ``fn`` with ``agent_name`` only when its signature accepts it.
+
+    Custom ToolsetDiscovery stand-ins (tests, experiment subclasses) may not
+    declare the parameter; forwarding it blindly would raise TypeError.
+    """
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return fn(*args, **kwargs)
+    params = sig.parameters
+    if "agent_name" in params or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+    ):
+        kwargs.setdefault("agent_name", agent_name)
+    return fn(*args, **kwargs)
+
 logger = logging.getLogger(__name__)
 
 
@@ -194,8 +212,11 @@ class BaseAgent:
 
             available_env_tools = {
                 tool.get("function", {}).get("name")
-                for tool in self.toolset_discovery.get_tools_for_environment(
-                    env_name, self.current_phase
+                for tool in _call_with_agent_name(
+                    self.toolset_discovery.get_tools_for_environment,
+                    self.current_agent_name,
+                    env_name,
+                    self.current_phase,
                 )
             }
             available_env_tools.discard(None)
@@ -370,12 +391,18 @@ class BaseAgent:
         assert self.current_phase is not None, (
             "Agent context not set - call set_meta_context first"
         )
-        env_tools = self.toolset_discovery.get_tools_for_environment(
+        env_tools = _call_with_agent_name(
+            self.toolset_discovery.get_tools_for_environment,
+            self.current_agent_name,
             self.environment_name,
             self.current_phase,
         )
-        blackboard_tools = self.toolset_discovery.get_tools_for_blackboard(
-            self.current_phase, self.environment_name, retrieval_enabled=self.retrieval_enabled
+        blackboard_tools = _call_with_agent_name(
+            self.toolset_discovery.get_tools_for_blackboard,
+            self.current_agent_name,
+            self.current_phase,
+            self.environment_name,
+            retrieval_enabled=self.retrieval_enabled,
         )
         external_tools = await self.client.get_external_tools()
         combined_tools = env_tools + blackboard_tools + external_tools
