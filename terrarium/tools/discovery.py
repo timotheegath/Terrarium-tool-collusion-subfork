@@ -10,6 +10,14 @@ from terrarium.tools.environment import (
 class ToolsetDiscovery:
     def __init__(self):
         self._tools_by_environment: Dict[str, Any] = {}
+        # Optional environment binding (see bind_environment). When set,
+        # per-agent `environment.blocked_tools` entries are honoured when the
+        # toolset schemas are built for a specific agent.
+        self.environment: Any = None
+
+    def bind_environment(self, environment: Any) -> None:
+        """Bind the environment whose `blocked_tools`/`collusion` roles gate toolsets."""
+        self.environment = environment
 
     def _get_tools_instance(self, environment_name: str) -> Optional[Any]:
         if not environment_name:
@@ -31,7 +39,7 @@ class ToolsetDiscovery:
         return tools
 
     def get_tools_for_environment(
-        self, environment_name: str, phase: str
+        self, environment_name: str, phase: str, agent_name: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Get the toolset for a specific environment.
@@ -39,11 +47,28 @@ class ToolsetDiscovery:
         Args:
             environment_name: Canonical environment identifier (prefer passing environment.__class__.__name__)
             phase: Current phase ("planning" or "execution")
+            agent_name: Optional agent name; when given (and an environment is
+                bound), tools blocked for this agent in this phase via
+                `environment.blocked_tools` are withheld from the schema.
         """
         tools = self._get_tools_instance(environment_name)
         if not tools:
             return []
-        return tools.get_tools(phase)
+        tool_list = tools.get_tools(phase)
+        if agent_name is None or self.environment is None:
+            return tool_list
+        from terrarium.tools.gates import tool_blocked
+
+        return [
+            tool
+            for tool in tool_list
+            if not tool_blocked(
+                self.environment,
+                tool.get("function", {}).get("name"),
+                phase,
+                agent_name,
+            )
+        ]
 
     def get_env_tool_names(self, environment_name: str) -> Set[str]:
         """
@@ -92,7 +117,11 @@ class ToolsetDiscovery:
         return names
 
     def get_tools_for_blackboard(
-        self, phase: str, environment_name: str = "", retrieval_enabled: bool = False
+        self,
+        phase: str,
+        environment_name: str = "",
+        retrieval_enabled: bool = False,
+        agent_name: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Get blackboard specific tools for the given phase. This is different from Environment tools.
 
@@ -187,6 +216,19 @@ class ToolsetDiscovery:
                         },
                     }
                 )
+            if agent_name is not None and self.environment is not None:
+                from terrarium.tools.gates import tool_blocked
+
+                planning_tools = [
+                    tool
+                    for tool in planning_tools
+                    if not tool_blocked(
+                        self.environment,
+                        tool.get("function", {}).get("name"),
+                        phase,
+                        agent_name,
+                    )
+                ]
             return planning_tools
 
         return []

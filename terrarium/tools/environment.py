@@ -45,7 +45,9 @@ def _gated_tools_class(cls: Type[Any]) -> Type[Any]:
             phase: Optional[str] = None,
             iteration: Optional[int] = None,
         ) -> Any:
-            if tool_blocked(getattr(self, "environment", None), tool_name, phase):
+            if tool_blocked(
+                getattr(self, "environment", None), tool_name, phase, agent_name
+            ):
                 return blocked_response(tool_name, phase)
             return base_handle_tool_call(
                 self, tool_name, agent_name, arguments, phase, iteration
