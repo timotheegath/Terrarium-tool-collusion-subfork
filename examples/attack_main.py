@@ -30,6 +30,7 @@ from terrarium.utils import (
     get_model_name,
     build_vllm_runtime,
     get_generation_params,
+    run_phase_entries,
 )
 import asyncio
 from terrarium.attacks import (
@@ -131,6 +132,10 @@ async def run_simulation(config: Dict[str, Any]) -> bool:
 
         max_iterations = config["simulation"].get("max_iterations", 1)
         max_planning_rounds = config["simulation"].get("max_planning_rounds", 1)
+        phase_entries = [
+            {"phase": "planning", "rounds": max_planning_rounds},
+            {"phase": "execution", "rounds": 1},
+        ]
         try:
             with logging_redirect_tqdm():
                 # Main iteration
@@ -140,19 +145,12 @@ async def run_simulation(config: Dict[str, Any]) -> bool:
                         logging.info(f"Environment requested simulation stop at iteration {current_iteration}")
                         break
 
-                    # Planning Phase
-                    for planning_round in tqdm(range(1, max_planning_rounds + 1), desc="  Planning", position=1, leave=False, ncols=80):
-                        # Use consistent agent order for this iteration
-                        for agent in tqdm(environment.agents, desc="       Agents", position=2, leave=False, ncols=80):
-                            agent_context = environment.build_agent_context(agent.name, phase="planning", iteration=iteration, planning_round=planning_round)
-                            await communication_protocol.agent_planning_turn(agent, agent.name, agent_context, environment, iteration, planning_round)
-
-                    # Execution Phase
-                    with tqdm(total=1, desc="  Execution", position=1, leave=False, ncols=80) as pbar:
-                        for agent in tqdm(environment.agents, desc="       Agents", position=2, leave=False, ncols=80):
-                            agent_context = environment.build_agent_context(agent.name, phase="execution", iteration=iteration)
-                            await communication_protocol.agent_execution_turn(agent, agent.name, agent_context, environment, iteration)
-                        pbar.update(1)
+                    await run_phase_entries(
+                        phase_entries,
+                        environment=environment,
+                        communication_protocol=communication_protocol,
+                        iteration=iteration,
+                    )
 
                     environment.log_iteration_summary(current_iteration)
                 environment.generate_final_summary()
