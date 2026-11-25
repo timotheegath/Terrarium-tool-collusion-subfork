@@ -603,6 +603,7 @@ class ToolCallLogger:
         seed: int = 0,
         config: Dict[str, Any] = None,
         run_timestamp: Optional[str] = None,
+        log_dir: Optional[Path] = None,
     ):
         """
         Initialize the tool call logger.
@@ -611,15 +612,20 @@ class ToolCallLogger:
             environment_name: Name of the environment (e.g., "Hospital", "SmartGrid")
             seed: Simulation seed for unique log files
             config: Full configuration dictionary containing all simulation settings
+            log_dir: Optional explicit directory for the tool call logs. When omitted,
+                the standard logs/<env>/<tag_model>/<timestamp>/seed_<seed> layout is used
         """
         self.environment_name = environment_name
         self.seed = seed
         self.config = config or {}
-        tag_model = get_tag_model_subdir(self.config)
         self.run_timestamp = _resolve_run_timestamp(self.config, run_timestamp)
-        self.log_dir = build_log_dir(
-            environment_name, tag_model, seed, self.run_timestamp
-        )
+        if log_dir is not None:
+            self.log_dir = Path(log_dir)
+        else:
+            tag_model = get_tag_model_subdir(self.config)
+            self.log_dir = build_log_dir(
+                environment_name, tag_model, seed, self.run_timestamp
+            )
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.log_file_path = self.log_dir / "tool_calls.json"
         self.note_path = self.log_dir / "experiment_note.txt"
