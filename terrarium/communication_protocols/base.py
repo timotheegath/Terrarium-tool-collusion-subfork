@@ -72,8 +72,15 @@ class BaseCommunicationProtocol(ABC):
         iteration: int,
         phase: str,
         round_num: Optional[int] = None,
+        phase_config: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Handle a single agent turn in the given phase (generic, config-driven)."""
+        """Handle a single agent turn in the given phase (generic, config-driven).
+
+        ``phase_config`` is the resolved ``simulation.phases`` entry for this
+        phase (see ``utils.resolve_phases``/``load_phase_prompt_assets``); it
+        carries per-phase prompt assets (``prompt_text``/``prompt_hook``) and
+        tool gating (``blocked_tools``).
+        """
         raise NotImplementedError
 
     @abstractmethod

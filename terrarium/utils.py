@@ -5,6 +5,7 @@ This module provides shared utility functions used across different environments
 and components of the multi-agent communication protocol system.
 """
 
+import importlib
 import shutil
 import yaml
 from pathlib import Path
@@ -204,14 +205,73 @@ def _coerce_phase_rounds(value: Any, index: int) -> int:
     return rounds
 
 
+def _coerce_phase_blocked_tools(value: Any, index: int) -> List[str]:
+    """Coerce a `simulation.phases[i].blocked_tools` entry to a list of tool names."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple)) or any(
+        not isinstance(name, str) or not name.strip() for name in value
+    ):
+        raise ValueError(
+            f"simulation.phases[{index}].blocked_tools must be a list of non-empty "
+            f"tool name strings, got {value!r}"
+        )
+    return [name.strip() for name in value]
+
+
+def _validate_phase_prompt_hook(value: Any, index: int) -> Optional[str]:
+    """Validate a `simulation.phases[i].prompt_hook` "module:attr" spec."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            f"simulation.phases[{index}].prompt_hook must be a "
+            f"'module:callable' string, got {value!r}"
+        )
+    spec = value.strip()
+    module_name, sep, attr = spec.partition(":")
+    if not sep or not module_name.strip() or not attr.strip():
+        raise ValueError(
+            f"simulation.phases[{index}].prompt_hook must be a "
+            f"'module:callable' string, got {value!r}"
+        )
+    return spec
+
+
+_PHASE_ENTRY_KEYS = {"name", "rounds", "blocked_tools", "prompt_file", "prompt_hook"}
+
+
+def _empty_phase(name: str, rounds: int) -> Dict[str, Any]:
+    """A phase dict with all optional per-phase keys at their defaults."""
+    return {
+        "name": name,
+        "rounds": rounds,
+        "blocked_tools": [],
+        "prompt_file": None,
+        "prompt_hook": None,
+    }
+
+
 def resolve_phases(simulation_config: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Resolve the phase sequence a simulation runs per iteration.
 
-    Reads ``simulation.phases`` — a list of ``{"name": str, "rounds": int}`` entries
-    executed in order, each running ``rounds`` rounds over all agents. When the key
-    is absent, falls back to the legacy hardcoded sequence derived from
-    ``simulation.max_planning_rounds``:
+    Reads ``simulation.phases`` — a list of entries executed in order, each
+    running ``rounds`` rounds over all agents. Each entry supports:
+
+    - ``name`` (str, required): phase name; also selects tool gating and prompts.
+    - ``rounds`` (positive int, required): rounds over all agents in this phase.
+    - ``blocked_tools`` (list of str, optional): tools disabled in this phase.
+      ``"*"`` blocks all environment tools but never blackboard tools.
+    - ``prompt_file`` (str, optional): text file appended to the user prompt in
+      this phase (relative paths resolve against the config file's directory).
+    - ``prompt_hook`` (str, optional): ``"module:callable"`` invoked each turn in
+      this phase; its return string is appended to the user prompt.
+
+    When the key is absent, falls back to the legacy hardcoded sequence derived
+    from ``simulation.max_planning_rounds``:
     ``[{"name": "planning", "rounds": max_planning_rounds or 1},
        {"name": "execution", "rounds": 1}]``.
 
@@ -219,7 +279,8 @@ def resolve_phases(simulation_config: Optional[Dict[str, Any]]) -> List[Dict[str
         simulation_config: The ``simulation`` section of a run config
 
     Returns:
-        List of ``{"name": str, "rounds": int}`` dicts in run order
+        List of phase dicts (``name``/``rounds`` plus the optional keys above)
+        in run order
 
     Raises:
         ValueError: If ``simulation.phases`` is present but malformed
@@ -234,8 +295,8 @@ def resolve_phases(simulation_config: Optional[Dict[str, Any]]) -> List[Dict[str
     if raw_phases is None:
         planning_rounds = int(simulation_config.get("max_planning_rounds") or 1)
         return [
-            {"name": "planning", "rounds": planning_rounds},
-            {"name": "execution", "rounds": 1},
+            _empty_phase("planning", planning_rounds),
+            _empty_phase("execution", 1),
         ]
 
     if not isinstance(raw_phases, list) or not raw_phases:
@@ -251,18 +312,92 @@ def resolve_phases(simulation_config: Optional[Dict[str, Any]]) -> List[Dict[str
                 f"simulation.phases[{index}] must be a mapping with 'name' and "
                 f"'rounds', got {entry!r}"
             )
+        unknown_keys = set(entry) - _PHASE_ENTRY_KEYS
+        if unknown_keys:
+            raise ValueError(
+                f"simulation.phases[{index}] has unknown keys {sorted(unknown_keys)}; "
+                f"supported keys: {sorted(_PHASE_ENTRY_KEYS)}"
+            )
         name = entry.get("name")
         if not isinstance(name, str) or not name.strip():
             raise ValueError(
                 f"simulation.phases[{index}].name must be a non-empty string, "
                 f"got {name!r}"
             )
-        phases.append(
-            {
-                "name": name.strip(),
-                "rounds": _coerce_phase_rounds(entry.get("rounds"), index),
-            }
+        prompt_file = entry.get("prompt_file")
+        if prompt_file is not None and (
+            not isinstance(prompt_file, str) or not prompt_file.strip()
+        ):
+            raise ValueError(
+                f"simulation.phases[{index}].prompt_file must be a non-empty "
+                f"string, got {prompt_file!r}"
+            )
+        phase = _empty_phase(name.strip(), _coerce_phase_rounds(entry.get("rounds"), index))
+        phase["blocked_tools"] = _coerce_phase_blocked_tools(
+            entry.get("blocked_tools"), index
         )
+        phase["prompt_file"] = prompt_file.strip() if isinstance(prompt_file, str) else None
+        phase["prompt_hook"] = _validate_phase_prompt_hook(entry.get("prompt_hook"), index)
+        phases.append(phase)
+    return phases
+
+
+def load_phase_prompt_assets(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Resolve the phase sequence and load per-phase prompt assets.
+
+    Like :func:`resolve_phases`, but additionally loads each phase's
+    ``prompt_file`` into ``phase["prompt_text"]`` (relative paths resolve
+    against the config file's directory, recorded in ``config["_config_path"]``
+    by :func:`load_config`) and imports each ``prompt_hook`` spec into
+    ``phase["prompt_hook"]`` as a callable.
+
+    Args:
+        config: The full run config (as returned by :func:`load_config`)
+
+    Returns:
+        The resolved phase dicts, enriched with ``prompt_text`` and
+        ``prompt_hook`` keys
+
+    Raises:
+        ValueError: If a prompt file cannot be read or a hook cannot be imported
+    """
+    phases = resolve_phases((config or {}).get("simulation"))
+    config_path = (config or {}).get("_config_path")
+    base_dir = Path(config_path).resolve().parent if config_path else Path.cwd()
+    for index, phase in enumerate(phases):
+        prompt_file = phase.get("prompt_file")
+        prompt_text = ""
+        if prompt_file:
+            prompt_path = Path(prompt_file)
+            if not prompt_path.is_absolute():
+                prompt_path = base_dir / prompt_path
+            try:
+                prompt_text = prompt_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise ValueError(
+                    f"simulation.phases[{index}].prompt_file {prompt_file!r} could "
+                    f"not be read (resolved to {prompt_path}): {exc}"
+                ) from exc
+        hook = None
+        hook_spec = phase.get("prompt_hook")
+        if hook_spec:
+            module_name, _, attr = hook_spec.partition(":")
+            try:
+                module = importlib.import_module(module_name)
+            except ImportError as exc:
+                raise ValueError(
+                    f"simulation.phases[{index}].prompt_hook {hook_spec!r}: cannot "
+                    f"import module {module_name!r}: {exc}"
+                ) from exc
+            hook = getattr(module, attr, None)
+            if not callable(hook):
+                raise ValueError(
+                    f"simulation.phases[{index}].prompt_hook {hook_spec!r}: module "
+                    f"{module_name!r} has no callable {attr!r}"
+                )
+        phase["prompt_text"] = prompt_text
+        phase["prompt_hook"] = hook
     return phases
 
 

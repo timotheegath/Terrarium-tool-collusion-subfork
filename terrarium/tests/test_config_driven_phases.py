@@ -5,14 +5,33 @@ and SequentialCommunicationProtocol.agent_turn is driven with a stub agent
 that records the kwargs it is called with.
 """
 
+import sys
+import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List
 
 from terrarium.communication_protocols.sequential import SequentialCommunicationProtocol
 from terrarium.core.blackboard import Megaboard
 from terrarium.tools.discovery import ToolsetDiscovery
 from terrarium.tools.prompts import get_phase_tool_instructions
-from terrarium.utils import resolve_phases, validate_config
+from terrarium.utils import (
+    load_phase_prompt_assets,
+    resolve_phases,
+    validate_config,
+)
+
+
+def _phase(name, rounds, blocked_tools=None, prompt_file=None, prompt_hook=None):
+    """Expected resolved phase dict (all optional keys present)."""
+    return {
+        "name": name,
+        "rounds": rounds,
+        "blocked_tools": blocked_tools or [],
+        "prompt_file": prompt_file,
+        "prompt_hook": prompt_hook,
+    }
 
 
 class ResolvePhasesTests(unittest.TestCase):
@@ -20,15 +39,15 @@ class ResolvePhasesTests(unittest.TestCase):
         self.assertEqual(
             resolve_phases({"max_planning_rounds": 3}),
             [
-                {"name": "planning", "rounds": 3},
-                {"name": "execution", "rounds": 1},
+                _phase("planning", 3),
+                _phase("execution", 1),
             ],
         )
 
     def test_default_when_max_planning_rounds_missing_or_falsy(self):
         expected = [
-            {"name": "planning", "rounds": 1},
-            {"name": "execution", "rounds": 1},
+            _phase("planning", 1),
+            _phase("execution", 1),
         ]
         for simulation_config in (
             None,
@@ -45,12 +64,15 @@ class ResolvePhasesTests(unittest.TestCase):
             {"name": "critique", "rounds": 1},
             {"name": "execution", "rounds": 1},
         ]
-        self.assertEqual(resolve_phases({"phases": phases}), phases)
+        self.assertEqual(
+            resolve_phases({"phases": phases}),
+            [_phase("planning", 2), _phase("critique", 1), _phase("execution", 1)],
+        )
 
     def test_explicit_phases_normalize_name_and_rounds(self):
         self.assertEqual(
             resolve_phases({"phases": [{"name": " review ", "rounds": "2"}]}),
-            [{"name": "review", "rounds": 2}],
+            [_phase("review", 2)],
         )
 
     def test_invalid_phase_entries_raise_value_error(self):
@@ -70,10 +92,56 @@ class ResolvePhasesTests(unittest.TestCase):
             {"phases": [{"name": "x", "rounds": 1.5}]},
             {"phases": [{"name": "x", "rounds": True}]},
             {"phases": [{"name": "x", "rounds": "many"}]},
+            # per-phase optional keys
+            {"phases": [{"name": "x", "rounds": 1, "blocked_tools": "*", "extra": 1}]},
+            {"phases": [{"name": "x", "rounds": 1, "blocked_tools": [1]}]},
+            {"phases": [{"name": "x", "rounds": 1, "blocked_tools": ["  "]}]},
+            {"phases": [{"name": "x", "rounds": 1, "blocked_tools": 7}]},
+            {"phases": [{"name": "x", "rounds": 1, "prompt_file": ""}]},
+            {"phases": [{"name": "x", "rounds": 1, "prompt_file": 42}]},
+            {"phases": [{"name": "x", "rounds": 1, "prompt_hook": "no_colon"}]},
+            {"phases": [{"name": "x", "rounds": 1, "prompt_hook": ":func"}]},
+            {"phases": [{"name": "x", "rounds": 1, "prompt_hook": "mod:"}]},
+            {"phases": [{"name": "x", "rounds": 1, "prompt_hook": 7}]},
+            # unknown keys are rejected so typos fail fast
+            {"phases": [{"name": "x", "rounds": 1, "block_tools": ["*"]}]},
         ]
         for simulation_config in bad_configs:
             with self.subTest(simulation_config=simulation_config), self.assertRaises(ValueError):
                 resolve_phases(simulation_config)
+
+    def test_per_phase_keys_pass_through_and_normalize(self):
+        resolved = resolve_phases(
+            {
+                "phases": [
+                    {
+                        "name": " critique ",
+                        "rounds": 1,
+                        "blocked_tools": ["*", " post_message "],
+                        "prompt_file": " prompts/critique.txt ",
+                        "prompt_hook": "my_mod:my_hook",
+                    }
+                ]
+            }
+        )
+        self.assertEqual(
+            resolved,
+            [
+                _phase(
+                    "critique",
+                    1,
+                    blocked_tools=["*", "post_message"],
+                    prompt_file="prompts/critique.txt",
+                    prompt_hook="my_mod:my_hook",
+                )
+            ],
+        )
+
+    def test_single_string_blocked_tools_coerced_to_list(self):
+        resolved = resolve_phases(
+            {"phases": [{"name": "x", "rounds": 1, "blocked_tools": "*"}]}
+        )
+        self.assertEqual(resolved[0]["blocked_tools"], ["*"])
 
     def test_non_dict_simulation_config_raises(self):
         with self.assertRaises(ValueError):
@@ -308,6 +376,190 @@ class AgentTurnTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(execution_call["phase"], "execution")
         self.assertNotIn("round_num", execution_call)
         self.assertEqual(execution_call["iteration"], 2)
+
+    async def test_agent_turn_forwards_phase_config(self):
+        protocol = _make_protocol()
+        environment = _StubEnvironment()
+        self._bind(protocol, environment)
+        agent = _RecordingAgent()
+        phase_config = {"name": "critique", "rounds": 1, "prompt_text": "be nice"}
+
+        await protocol.agent_turn(
+            agent, "agent_0", {}, environment, 1, phase="critique", round_num=1,
+            phase_config=phase_config,
+        )
+
+        self.assertIs(agent.calls[0]["phase_config"], phase_config)
+
+    async def test_agent_turn_omits_phase_config_when_not_given(self):
+        protocol = _make_protocol()
+        environment = _StubEnvironment()
+        self._bind(protocol, environment)
+        agent = _RecordingAgent()
+
+        await protocol.agent_turn(agent, "agent_0", {}, environment, 1, phase="planning", round_num=1)
+
+        self.assertNotIn("phase_config", agent.calls[0])
+
+
+class LoadPhasePromptAssetsTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp_dir = Path(self._tmp.name)
+        # A config "file" so _config_path has a directory to resolve against.
+        self.config_path = self.tmp_dir / "run.yaml"
+        self.config_path.write_text("simulation: {}\n", encoding="utf-8")
+        # A hook module importable from the config directory.
+        (self.tmp_dir / "phase_hooks.py").write_text(
+            "def critique_hook(agent_name, **kwargs):\n"
+            "    return f'hook says hi to {agent_name}'\n",
+            encoding="utf-8",
+        )
+        sys.path.insert(0, str(self.tmp_dir))
+        self.addCleanup(lambda: sys.path.remove(str(self.tmp_dir)))
+        self.addCleanup(lambda: sys.modules.pop("phase_hooks", None))
+
+    def _config(self, phases):
+        return {"_config_path": str(self.config_path), "simulation": {"phases": phases}}
+
+    def test_prompt_file_resolved_relative_to_config_dir(self):
+        (self.tmp_dir / "prompts").mkdir()
+        (self.tmp_dir / "prompts" / "critique.txt").write_text(
+            "CRITIQUE PROMPT", encoding="utf-8"
+        )
+        phases = load_phase_prompt_assets(
+            self._config(
+                [{"name": "critique", "rounds": 1, "prompt_file": "prompts/critique.txt"}]
+            )
+        )
+        self.assertEqual(phases[0]["prompt_text"], "CRITIQUE PROMPT")
+        self.assertIsNone(phases[0]["prompt_hook"])
+
+    def test_prompt_file_absolute_path(self):
+        prompt_path = self.tmp_dir / "abs.txt"
+        prompt_path.write_text("ABS PROMPT", encoding="utf-8")
+        phases = load_phase_prompt_assets(
+            self._config(
+                [{"name": "critique", "rounds": 1, "prompt_file": str(prompt_path)}]
+            )
+        )
+        self.assertEqual(phases[0]["prompt_text"], "ABS PROMPT")
+
+    def test_missing_prompt_file_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            load_phase_prompt_assets(
+                self._config([{"name": "critique", "rounds": 1, "prompt_file": "nope.txt"}])
+            )
+
+    def test_prompt_hook_imported(self):
+        phases = load_phase_prompt_assets(
+            self._config(
+                [{"name": "critique", "rounds": 1, "prompt_hook": "phase_hooks:critique_hook"}]
+            )
+        )
+        hook = phases[0]["prompt_hook"]
+        self.assertTrue(callable(hook))
+        self.assertEqual(hook("agent_0"), "hook says hi to agent_0")
+        self.assertEqual(phases[0]["prompt_text"], "")
+
+    def test_bad_prompt_hook_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            load_phase_prompt_assets(
+                self._config(
+                    [{"name": "x", "rounds": 1, "prompt_hook": "no_such_mod_xyz:hook"}]
+                )
+            )
+        with self.assertRaises(ValueError):
+            load_phase_prompt_assets(
+                self._config([{"name": "x", "rounds": 1, "prompt_hook": "phase_hooks:missing"}])
+            )
+
+    def test_phases_without_prompt_keys_get_empty_assets(self):
+        phases = load_phase_prompt_assets(
+            self._config([{"name": "planning", "rounds": 2}, {"name": "execution", "rounds": 1}])
+        )
+        for phase in phases:
+            self.assertEqual(phase["prompt_text"], "")
+            self.assertIsNone(phase["prompt_hook"])
+
+    def test_default_phases_get_empty_assets(self):
+        config = {"_config_path": str(self.config_path), "simulation": {"max_planning_rounds": 2}}
+        phases = load_phase_prompt_assets(config)
+        self.assertEqual([p["name"] for p in phases], ["planning", "execution"])
+        for phase in phases:
+            self.assertEqual(phase["prompt_text"], "")
+            self.assertIsNone(phase["prompt_hook"])
+
+
+class _StubClient:
+    async def get_external_tool_names(self):
+        return set()
+
+
+class AgentPhasePromptAndGatingTests(unittest.IsolatedAsyncioTestCase):
+    """BaseAgent per-phase prompt injection and tool gating, no LLM access."""
+
+    def _agent(self, simulation_config):
+        from terrarium.agents.base import BaseAgent
+
+        agent = BaseAgent.__new__(BaseAgent)
+        agent.communication_protocol = SimpleNamespace(
+            simulation_config=simulation_config, environment=None
+        )
+        agent.current_agent_name = "agent_0"
+        agent.current_phase = "critique"
+        agent.current_iteration = 1
+        agent.current_round = 1
+        agent.current_phase_config = None
+        agent.tool_logger = None
+        agent.trajectory_logger = None
+        agent.toolset_discovery = ToolsetDiscovery()
+        agent.environment_name = "HospitalEnvironment"
+        agent.retrieval_enabled = False
+        agent.client = _StubClient()
+        return agent
+
+    def test_phase_prompt_block_combines_file_text_and_hook(self):
+        agent = self._agent({})
+        agent.current_phase_config = {
+            "prompt_text": "FILE TEXT",
+            "prompt_hook": lambda agent_name, **kw: f"HOOK:{agent_name}",
+        }
+        block = agent._build_phase_prompt_block("agent_0", {}, {})
+        self.assertIn("PHASE INSTRUCTIONS (critique)", block)
+        self.assertIn("FILE TEXT", block)
+        self.assertIn("HOOK:agent_0", block)
+
+    def test_phase_prompt_block_empty_without_phase_config(self):
+        agent = self._agent({})
+        self.assertEqual(agent._build_phase_prompt_block("agent_0", {}, {}), "")
+
+    def test_phase_prompt_hook_signature_filtering(self):
+        agent = self._agent({})
+        agent.current_phase_config = {
+            "prompt_hook": lambda phase: f"only-phase:{phase}",
+        }
+        block = agent._build_phase_prompt_block("agent_0", {}, {})
+        self.assertIn("only-phase:critique", block)
+
+    async def test_blocked_tool_call_returns_blocked_response(self):
+        agent = self._agent(
+            {"phases": [{"name": "critique", "rounds": 1, "blocked_tools": ["schedule_patient"]}]}
+        )
+        result = await agent._execute_tool_call("schedule_patient", {"patient_id": "P1"})
+        self.assertEqual(result["blocked"], True)
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn("critique", result["error"])
+
+    async def test_unblocked_tool_is_not_short_circuited(self):
+        agent = self._agent(
+            {"phases": [{"name": "critique", "rounds": 1, "blocked_tools": ["*"]}]}
+        )
+        # post_message is a blackboard tool name, so "*" must not block it; the
+        # call should proceed past the gate and fail later in dispatch instead.
+        result = await agent._execute_tool_call("post_message", {"message": "hi"})
+        self.assertNotEqual(result.get("status"), "blocked")
 
 
 if __name__ == "__main__":

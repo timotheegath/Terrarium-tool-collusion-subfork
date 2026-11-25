@@ -7,6 +7,7 @@ import time
 from typing import Any, Callable, Dict, Optional
 from terrarium.llm.clients.abstract_client import AbstractClient
 from terrarium.tools.discovery import ToolsetDiscovery
+from terrarium.tools.gates import blocked_response, tool_blocked_in
 from terrarium.core.async_utils import run_blocking
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ class BaseAgent:
         self.current_phase = None
         self.current_iteration = None
         self.current_round = None
+        self.current_phase_config: Optional[Dict[str, Any]] = None
         self.communication_protocol = None
         self._env_state_committed = False
 
@@ -148,6 +150,7 @@ class BaseAgent:
         phase: str,
         iteration: int,
         round_num: Optional[int] = None,
+        phase_config: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Set the current agent context for tool call logging.
@@ -157,11 +160,86 @@ class BaseAgent:
             phase: Current phase (planning, execution, etc.)
             iteration: Current iteration number
             round_num: Current round number
+            phase_config: Resolved `simulation.phases` entry for this phase
+                (per-phase prompt assets and tool gating), if any
         """
         self.current_agent_name = agent_name
         self.current_phase = phase
         self.current_iteration = iteration
         self.current_round = round_num
+        self.current_phase_config = phase_config
+
+    def _phase_simulation_config(self) -> Optional[Dict[str, Any]]:
+        """The ``simulation`` section of the run config, via the bound protocol."""
+        protocol = self.communication_protocol
+        if protocol is None:
+            return None
+        sim_config = getattr(protocol, "simulation_config", None)
+        if sim_config is None:
+            config = getattr(protocol, "config", None)
+            if isinstance(config, dict):
+                sim_config = config.get("simulation")
+        return sim_config if isinstance(sim_config, dict) else None
+
+    def _call_phase_prompt_hook(
+        self,
+        hook: Callable,
+        agent_name: str,
+        agent_context: Dict[str, Any],
+        blackboard_context: Dict[str, str],
+    ) -> str:
+        """Call a phase ``prompt_hook`` with the kwargs its signature accepts."""
+        available = {
+            "agent_name": agent_name,
+            "agent_context": agent_context,
+            "blackboard_context": blackboard_context,
+            "environment": getattr(self.communication_protocol, "environment", None),
+            "phase": self.current_phase,
+            "iteration": self.current_iteration,
+            "round_num": self.current_round,
+        }
+        try:
+            sig = inspect.signature(hook)
+        except (TypeError, ValueError):
+            sig = None
+        if sig is None or any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in sig.parameters.values()
+        ):
+            result = hook(**available)
+        else:
+            result = hook(
+                **{k: v for k, v in available.items() if k in sig.parameters}
+            )
+        return "" if result is None else str(result)
+
+    def _build_phase_prompt_block(
+        self,
+        agent_name: str,
+        agent_context: Dict[str, Any],
+        blackboard_context: Dict[str, str],
+    ) -> str:
+        """Per-phase prompt suffix (prompt_file text + prompt_hook output)."""
+        phase_config = self.current_phase_config or {}
+        parts: List[str] = []
+        prompt_text = str(phase_config.get("prompt_text") or "").strip()
+        if prompt_text:
+            parts.append(prompt_text)
+        hook = phase_config.get("prompt_hook")
+        if callable(hook):
+            hook_output = self._call_phase_prompt_hook(
+                hook, agent_name, agent_context, blackboard_context
+            ).strip()
+            if hook_output:
+                parts.append(hook_output)
+        if not parts:
+            return ""
+        body = "\n\n".join(parts)
+        return (
+            f"=== PHASE INSTRUCTIONS ({self.current_phase}) ===\n"
+            f"{body}\n"
+            f"=========================================="
+        )
 
     async def _execute_tool_call(
         self, tool_name: str, tool_arguments: Dict[str, Any]
@@ -189,6 +267,8 @@ class BaseAgent:
 
         result: Dict[str, Any] = {"error": "Unknown error"}
         try:
+            if tool_blocked_in(self._phase_simulation_config(), tool_name, self.current_phase):
+                return blocked_response(tool_name, self.current_phase)
             # NOTE: Depending on the communication protocol implementation, this logic may have to change.
             env_name = self.environment_name or ""
 
@@ -281,6 +361,7 @@ class BaseAgent:
         phase: str,
         iteration: int,
         round_num: int = 0,
+        phase_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Generate a response for a specific agent with full context.
@@ -308,6 +389,7 @@ class BaseAgent:
                 phase=phase,
                 iteration=iteration,
                 round_num=round_num,
+                phase_config=phase_config,
             )
 
             system_prompt = None
@@ -344,6 +426,11 @@ class BaseAgent:
             )
             if system_prompt is None or user_prompt is None:
                 raise ValueError("Prompts returned empty system/user prompt")
+            phase_block = self._build_phase_prompt_block(
+                agent_name, agent_context, blackboard_context
+            )
+            if phase_block:
+                user_prompt = f"{user_prompt}\n\n{phase_block}"
 
             return await self._multi_step_response_generation(
                 system_prompt=system_prompt, user_prompt=user_prompt
@@ -377,6 +464,24 @@ class BaseAgent:
         blackboard_tools = self.toolset_discovery.get_tools_for_blackboard(
             self.current_phase, self.environment_name, retrieval_enabled=self.retrieval_enabled
         )
+        # Withhold schemas for tools blocked in this phase (simulation.phases
+        # blocked_tools); runtime enforcement happens in _execute_tool_call.
+        phase_sim_config = self._phase_simulation_config()
+        if phase_sim_config:
+            env_tools = [
+                tool
+                for tool in env_tools
+                if not tool_blocked_in(
+                    phase_sim_config, tool.get("function", {}).get("name"), self.current_phase
+                )
+            ]
+            blackboard_tools = [
+                tool
+                for tool in blackboard_tools
+                if not tool_blocked_in(
+                    phase_sim_config, tool.get("function", {}).get("name"), self.current_phase
+                )
+            ]
         external_tools = await self.client.get_external_tools()
         combined_tools = env_tools + blackboard_tools + external_tools
         tool_set = []

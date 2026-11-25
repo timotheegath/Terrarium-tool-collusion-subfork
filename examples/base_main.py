@@ -29,7 +29,7 @@ from terrarium.utils import (
     build_vllm_runtime,
     get_generation_params,
     prepare_simulation_config,
-    resolve_phases,
+    load_phase_prompt_assets,
 )
 import asyncio
 from terrarium.core.logger import ToolCallLogger, AgentTrajectoryLogger
@@ -98,7 +98,7 @@ async def run_simulation(config: Dict[str, Any]) -> bool:
         environment.set_agent_clients(agents)
 
         max_iterations = config["simulation"].get("max_iterations", 1)
-        phases = resolve_phases(config["simulation"])
+        phases = load_phase_prompt_assets(config)
         try:
             with logging_redirect_tqdm():
                 # Main iteration
@@ -115,7 +115,7 @@ async def run_simulation(config: Dict[str, Any]) -> bool:
                             # Use consistent agent order for this iteration
                             for agent in tqdm(environment.agents, desc="       Agents", position=2, leave=False, ncols=80):
                                 agent_context = environment.build_agent_context(agent.name, phase=phase_name, iteration=iteration, planning_round=round_num)
-                                await communication_protocol.agent_turn(agent, agent.name, agent_context, environment, iteration, phase=phase_name, round_num=round_num)
+                                await communication_protocol.agent_turn(agent, agent.name, agent_context, environment, iteration, phase=phase_name, round_num=round_num, phase_config=phase)
 
                     environment.log_iteration_summary(current_iteration)
                 environment.generate_final_summary()
