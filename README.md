@@ -1,70 +1,34 @@
-<p align="center">
-  <img src="dev/terrarium_logo_rounded.png" alt="Terrarium logo" width="620">
-</p>
+# Terrarium for agentic collusion via tools
 
-<!-- <h1 align="center">Terrarium</h1> -->
-
-<p align="center">
-  A configurable laboratory for studying decentralized LLM-based multi-agent systems.
-</p>
-
-<p align="center">
-  <a href="https://aisec.cs.umass.edu/Terrarium/latest/">Docs</a>
-  ·
-  <a href="https://arxiv.org/pdf/2510.14312v1">Paper</a>
-  ·
-  <a href="https://aisec.cs.umass.edu/Terrarium/latest/quickstart.html">Quick start</a>
-  ·
-  <a href="examples/configs">Example configs</a>
-  ·
-  <a href="https://aisec.cs.umass.edu/Terrarium/latest/api/">API reference</a>
-</p>
-
-<p align="center">
-  <a href="https://pypi.org/project/terrarium-agents/">
-    <img alt="PyPI" src="https://img.shields.io/pypi/v/terrarium-agents.svg">
-  </a>
-  <a href="https://pypi.org/project/terrarium-agents/">
-    <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-blue.svg">
-  </a>
-  <a href="LICENSE">
-    <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg">
-  </a>
-  <a href="https://arxiv.org/pdf/2510.14312v1">
-    <img alt="arXiv" src="https://img.shields.io/badge/arXiv-2510.14312-b31b1b.svg">
-  </a>
-</p>
-
+This is a fork of Terrarium focusing on the hospital environment as part of the evaluation of agentic collusion using tools.
+The main contributor will primarily use this fork as a submodule of [the Colosseum-style evaluation repo](https://github.com/timotheegath/collusion-via-tools).
 Terrarium is an open-source framework for building controlled multi-agent environments and testing how communication, topology, private information, tools, model providers, and adversarial conditions affect coordination.
 
 It is not primarily a production agent orchestrator or a fixed benchmark. Terrarium is built for researchers, engineers, and students who want to run repeatable multi-agent experiments where the environment, communication structure, and attack surface are explicit.
 
-![Terrarium framework diagram](dev/framework_rounded.png)
+## Why the fork?
 
-## Why Terrarium?
+Throughout the first trial of setting up this evaluation, we needed to make several fundamental changes to the environment itself. Those were rapidly done as monkey patches. However:
 
-Modern LLM agents increasingly act through tools, APIs, shared memory, and other agents. That makes multi-agent behavior hard to evaluate with only single-agent prompts or fixed task suites. Terrarium gives you a small set of swappable components so you can ask sharper questions:
+- This hurt the code visibility and clarity
+- These changes would not be easily portable to the main Terrarium repo if they happened to be useful to it
+- The parent repo, which is itself a fork of the Colosseum repo, was still depending on an old version of Terrarium.
 
-- What changes when agents communicate through a complete graph instead of a path?
-- Does a shared blackboard improve reward, or does it spread bad information faster?
-- Which agents need private state for coordination to work?
-- How does an attack change the final utility, tool calls, and message trajectory?
-- Do different model providers behave differently under the same protocol?
+In the spirit of readability and potential contribution, I decided to include this fork as a submodule of the parent repo, instead of monkey-patching it.
 
-Terrarium makes these experiments available to researchers and practitioners instead of hiding them inside deeply convoluted or less modular frameworks.
+## Changes
+
+All changes are self-contained in branches based on the upstream repository, for easy merging upstream. They are documented in [the wiki](https://github.com/timotheegath/Terrarium-tool-collusion-subfork/wiki/Directory-of-branches) They focus on 
+1. Fixing observed bugs in the Hospital environment
+2. Adding convenience functions to reconfigure the Hospital environment without monkey patching as was done originally in the Colosseum repo, increasing code legibility.
+3. Adding support for custom LLM providers.
 
 ## Install
-
-Install the common provider, science, and plotting extras:
-
-```bash
-pip install "terrarium-agents[providers,science,plots]"
-```
 
 For local development:
 
 ```bash
-git clone https://github.com/umass-aisec/Terrarium.git
+git clone https://github.com/timotheegath/Terrarium-tool-collusion-subfork
 cd Terrarium
 uv venv --python 3.11 .venv
 source .venv/bin/activate
@@ -151,7 +115,6 @@ Terrarium runs are built from components. Swap one component while holding the o
 | LLM clients | `AbstractClient` | Provider-specific generation and tool-call parsing. |
 
 Component guides live in the [hosted documentation](https://aisec.cs.umass.edu/Terrarium/latest/components/environments.html).
-
 
 ## Repository Layout
 

@@ -49,3 +49,6 @@ experiments/plots/
 
 AGENTS.md
 .codex
+
+# Local folder used to store configs
+configs/
