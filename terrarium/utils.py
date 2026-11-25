@@ -5,14 +5,16 @@ This module provides shared utility functions used across different environments
 and components of the multi-agent communication protocol system.
 """
 
+import inspect
 import shutil
 import yaml
 from pathlib import Path
-from typing import TYPE_CHECKING, Union, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Union, Any, Callable, Dict, Iterable, List, Optional, Sequence
 import re
 import os
 
 from dotenv import load_dotenv
+from tqdm import tqdm
 
 import logging
 
@@ -824,3 +826,160 @@ def configure_logging(level: Optional[int] = None) -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("mcp.client.streamable_http").setLevel(logging.WARNING)
+
+
+async def _maybe_await(value: Any) -> Any:
+    """Await ``value`` when it is awaitable, otherwise return it unchanged."""
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+def _phase_entry_name(entry: Dict[str, Any], index: int) -> str:
+    """Extract the phase name from a phase entry (``phase`` or ``name`` key)."""
+    name = entry.get("phase", entry.get("name"))
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError(
+            f"phase_entries[{index}] must define a non-empty 'phase' (or 'name') "
+            f"string, got {entry!r}"
+        )
+    return name.strip()
+
+
+def _phase_entry_rounds(entry: Dict[str, Any], index: int) -> int:
+    """Extract the round count from a phase entry, defaulting to 1."""
+    value = entry.get("rounds", 1)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(
+            f"phase_entries[{index}].rounds must be a positive integer, got {value!r}"
+        )
+    return value
+
+
+async def run_phase_entries(
+    phase_entries: Sequence[Dict[str, Any]],
+    *,
+    environment: "AbstractEnvironment",
+    communication_protocol: Any,
+    iteration: int,
+    agents: Optional[Sequence[Any]] = None,
+    build_turn: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    on_turn: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    progress: bool = True,
+) -> List[Dict[str, Any]]:
+    """
+    Run one iteration's phase entries over the agents, in order.
+
+    Each entry is a mapping with a phase name under ``"phase"`` (or ``"name"``)
+    and an optional ``"rounds"`` count (default 1). Every entry runs all of its
+    rounds, and every round runs one turn per agent, in ``agents`` order
+    (defaults to ``environment.agents``). This is the shared phase walk used by
+    the example runners instead of copy-pasted loop code.
+
+    Each turn is described by a dict with the keys ``agent``, ``agent_name``,
+    ``phase``, ``iteration``, ``round`` and ``agent_context``; once the turn has
+    run, its protocol return value is stored under ``result``. The turn is
+    dispatched to the communication protocol: a generic ``agent_turn`` method
+    when the protocol defines one, otherwise ``agent_planning_turn`` for the
+    ``"planning"`` phase and ``agent_execution_turn`` for every other phase.
+
+    Args:
+        phase_entries: Phase entries to run, e.g.
+            ``[{"phase": "planning", "rounds": 2}, {"phase": "execution"}]``
+        environment: The simulation environment (provides ``agents`` and
+            ``build_agent_context``)
+        communication_protocol: The protocol that executes each agent turn
+        iteration: Current iteration number
+        agents: Agents to run turns for; defaults to ``environment.agents``
+        build_turn: Optional hook called with each turn dict before it runs; may
+            return a replacement turn dict (sync or async)
+        on_turn: Optional hook called with each turn dict after it ran, e.g. for
+            turn recording (sync or async)
+        progress: Show tqdm progress bars for rounds and agents
+
+    Returns:
+        The list of executed turn dicts, in run order
+
+    Raises:
+        ValueError: If a phase entry is malformed
+    """
+    if agents is None:
+        agents = list(environment.agents)
+    agent_turn = getattr(communication_protocol, "agent_turn", None)
+    generic_turn = callable(agent_turn)
+
+    turns: List[Dict[str, Any]] = []
+    for index, entry in enumerate(phase_entries):
+        if not isinstance(entry, dict):
+            raise ValueError(f"phase_entries[{index}] must be a mapping, got {entry!r}")
+        phase_name = _phase_entry_name(entry, index)
+        rounds = _phase_entry_rounds(entry, index)
+        round_numbers: Iterable[int] = range(1, rounds + 1)
+        if progress:
+            round_numbers = tqdm(
+                round_numbers,
+                desc=f"  {phase_name.capitalize()}",
+                position=1,
+                leave=False,
+                ncols=80,
+            )
+        for round_num in round_numbers:
+            turn_agents: Iterable[Any] = agents
+            if progress:
+                turn_agents = tqdm(
+                    agents, desc="       Agents", position=2, leave=False, ncols=80
+                )
+            for agent in turn_agents:
+                context_kwargs = (
+                    {"planning_round": round_num}
+                    if generic_turn or phase_name == "planning"
+                    else {}
+                )
+                agent_context = environment.build_agent_context(
+                    agent.name, phase=phase_name, iteration=iteration, **context_kwargs
+                )
+                turn = {
+                    "agent": agent,
+                    "agent_name": agent.name,
+                    "phase": phase_name,
+                    "iteration": iteration,
+                    "round": round_num,
+                    "agent_context": agent_context,
+                }
+                if build_turn is not None:
+                    built = await _maybe_await(build_turn(turn))
+                    if built is not None:
+                        turn = built
+                if generic_turn:
+                    result = await agent_turn(
+                        turn["agent"],
+                        turn["agent_name"],
+                        turn["agent_context"],
+                        environment,
+                        iteration,
+                        phase=turn["phase"],
+                        round_num=turn["round"],
+                        phase_config=entry,
+                    )
+                elif turn["phase"] == "planning":
+                    result = await communication_protocol.agent_planning_turn(
+                        turn["agent"],
+                        turn["agent_name"],
+                        turn["agent_context"],
+                        environment,
+                        iteration,
+                        turn["round"],
+                    )
+                else:
+                    result = await communication_protocol.agent_execution_turn(
+                        turn["agent"],
+                        turn["agent_name"],
+                        turn["agent_context"],
+                        environment,
+                        iteration,
+                    )
+                turn["result"] = result
+                if on_turn is not None:
+                    await _maybe_await(on_turn(turn))
+                turns.append(turn)
+    return turns
