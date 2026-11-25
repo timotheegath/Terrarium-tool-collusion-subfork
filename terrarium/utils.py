@@ -681,8 +681,17 @@ def get_client_instance(
             base_url_env_var=str(
                 compatible_cfg.get("base_url_env_var") or "OPENAI_COMPATIBLE_BASE_URL"
             ),
-            timeout=float(compatible_cfg.get("request_timeout", 30)),
+            timeout=float(compatible_cfg.get("request_timeout", 180)),
             base_model=compatible_cfg.get("base_model"),
+            stream=bool(compatible_cfg.get("stream", True)),
+            strip_reasoning_content=bool(
+                compatible_cfg.get("strip_reasoning_content", True)
+            ),
+            max_retries=compatible_cfg.get("max_retries"),
+            retry_initial_s=compatible_cfg.get("retry_initial_s"),
+            retry_max_s=compatible_cfg.get("retry_max_s"),
+            retry_multiplier=compatible_cfg.get("retry_multiplier"),
+            retry_jitter=compatible_cfg.get("retry_jitter"),
         )
     elif provider == "vllm":
         if not vllm_runtime:
