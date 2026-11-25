@@ -52,32 +52,6 @@ _STREAM_FAILED_NON_RETRYABLE_HINTS = (
     "unsupported",
 )
 
-# Client-error statuses that mean "this endpoint will not serve a streaming
-# request" rather than "this request is malformed". Only these trigger the
-# fallback to the blocking transport; 408/409/429 and 5xx stay retryable.
-_STREAM_REJECT_STATUSES = {400, 404, 405, 422, 501}
-
-
-class _StreamRejectedError(RuntimeError):
-    """The endpoint rejected a streaming request outright (see _STREAM_REJECT_STATUSES)."""
-
-
-class _StreamTerminatedEarlyError(RuntimeError):
-    """The SSE stream closed before any terminal response event (transient drop; retryable)."""
-
-
-class _StreamFailedError(RuntimeError):
-    """The stream delivered ``response.failed`` / ``error`` instead of a usable response.
-
-    ``retryable`` marks provider-side failures (server errors, rate limits) that
-    are worth retrying; deterministic client errors (bad request, context length,
-    content filter) are not.
-    """
-
-    def __init__(self, message: str, *, retryable: bool = True):
-        super().__init__(message)
-        self.retryable = retryable
-
 
 class OpenAIClient(AbstractClient):
     """
