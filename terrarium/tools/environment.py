@@ -23,8 +23,8 @@ def _gated_tools_class(cls: Type[Any]) -> Type[Any]:
 
     The subclass keeps the original class name/module so existing type checks
     (``type(tools).__name__``, ``isinstance``) keep working. ``handle_tool_call``
-    checks ``environment.blocked_tools`` for the current phase and returns a
-    blocked result without executing the tool.
+    checks the phase's ``blocked_tools`` entry in ``simulation.phases`` and
+    returns a blocked result without executing the tool.
     """
     cached = _GATED_TOOLS_CLASS_CACHE.get(cls)
     if cached is not None:

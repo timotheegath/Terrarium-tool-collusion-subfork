@@ -11,7 +11,7 @@ from terrarium.tools.environment import (
     EnvironmentToolsNotFoundError,
     instantiate_environment_tools,
 )
-from terrarium.tools.gates import blocked_response, tool_blocked
+from terrarium.tools.gates import blocked_response, tool_blocked, tool_blocked_in
 from terrarium.core.logger import BlackboardLogger
 from terrarium.compaction import compact_events, CompactionLogger
 from terrarium.utils import get_client_instance, get_generation_params, get_model_name
@@ -181,7 +181,10 @@ class SequentialCommunicationProtocol(BaseCommunicationProtocol):
         phase: Optional[str] = None,
         iteration: Optional[int] = None,
     ) -> Dict[str, Any]:
-        if tool_blocked(self.environment, tool_name, phase):
+        sim_config = getattr(self, "simulation_config", None)
+        if tool_blocked_in(sim_config, tool_name, phase) or tool_blocked(
+            self.environment, tool_name, phase
+        ):
             return blocked_response(tool_name, phase)
         response = self.megaboard.handle_tool_call(
             tool_name, agent_name, arguments, phase, iteration
@@ -287,13 +290,15 @@ class SequentialCommunicationProtocol(BaseCommunicationProtocol):
         iteration: int,
         phase: str,
         round_num: Optional[int] = None,
+        phase_config: Optional[Dict[str, Any]] = None,
     ):
         """Handle a single agent turn in the given phase.
 
         Generic turn used for every phase of the config-driven phase sequence
         (see ``simulation.phases``). ``round_num`` is forwarded to the agent as
         the planning round; when None it is left at the agent's default (the
-        execution-phase behavior).
+        execution-phase behavior). ``phase_config`` is the resolved phase entry
+        (per-phase prompt assets and tool gating), forwarded to the agent.
         """
         self.environment = environment
         self._ensure_environment_tools_initialized()
@@ -309,6 +314,8 @@ class SequentialCommunicationProtocol(BaseCommunicationProtocol):
         generate_kwargs: Dict[str, Any] = {}
         if round_num is not None:
             generate_kwargs["round_num"] = round_num
+        if phase_config is not None:
+            generate_kwargs["phase_config"] = phase_config
         await agent.generate_response(
             agent_name=agent_name,
             agent_context=agent_context,

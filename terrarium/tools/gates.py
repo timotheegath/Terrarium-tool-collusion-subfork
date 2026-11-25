@@ -1,12 +1,13 @@
-"""Per-phase tool gating driven by the ``environment.blocked_tools`` config.
+"""Per-phase tool gating driven by ``simulation.phases[*].blocked_tools``.
 
-``blocked_tools`` is a map of ``{phase_name: [tool names...]}``. The wildcard
-``"*"`` blocks every environment tool in that phase, but never blackboard
-tools; blackboard tools (e.g. ``post_message``) must be named explicitly.
+Each entry of ``simulation.phases`` may list ``blocked_tools: [tool names...]``.
+The wildcard ``"*"`` blocks every environment tool in that phase, but never
+blackboard tools; blackboard tools (e.g. ``post_message``) must be named
+explicitly. With no ``blocked_tools`` on a phase, nothing is blocked.
 """
 
 from collections.abc import Mapping
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Set
 
 WILDCARD = "*"
 
@@ -16,30 +17,58 @@ BLACKBOARD_TOOL_NAMES = frozenset(
 )
 
 
-def tool_blocked(env: Any, tool_name: str, phase: Any) -> bool:
-    """Whether ``tool_name`` is blocked for ``phase`` on ``env``.
+def blocked_tools_for_phase(simulation_config: Optional[Mapping[str, Any]], phase: Any) -> Set[str]:
+    """The set of blocked tool names for ``phase`` from ``simulation.phases``.
 
-    Reads ``env.env_config.get("blocked_tools", {})``. Defaults to False when
-    the environment or config is missing, so behavior is unchanged without
-    ``blocked_tools`` configured.
+    Matches the phase entry whose ``name`` equals ``phase`` (exact, case-sensitive
+    — ``resolve_phases`` strips whitespace). Returns an empty set when there is
+    no ``phases`` key, no matching entry, or the entry has no ``blocked_tools``.
     """
-    if env is None or tool_name is None or phase is None:
+    if not isinstance(simulation_config, Mapping) or phase is None:
+        return set()
+    raw_phases = simulation_config.get("phases")
+    if not isinstance(raw_phases, list):
+        return set()
+    for entry in raw_phases:
+        if not isinstance(entry, Mapping):
+            continue
+        if entry.get("name") != phase:
+            continue
+        blocked = entry.get("blocked_tools", [])
+        if isinstance(blocked, str):
+            blocked = [blocked]
+        if not isinstance(blocked, (list, tuple, set, frozenset)):
+            return set()
+        return {str(name) for name in blocked}
+    return set()
+
+
+def tool_blocked_in(simulation_config: Optional[Mapping[str, Any]], tool_name: str, phase: Any) -> bool:
+    """Whether ``tool_name`` is blocked for ``phase`` given a ``simulation`` config section."""
+    if tool_name is None or phase is None:
         return False
-    env_config = getattr(env, "env_config", {})
-    if not isinstance(env_config, Mapping):
+    names = blocked_tools_for_phase(simulation_config, phase)
+    if not names:
         return False
-    blocked_tools = env_config.get("blocked_tools", {})
-    if not isinstance(blocked_tools, Mapping):
-        return False
-    phase_blocked = blocked_tools.get(phase, [])
-    if isinstance(phase_blocked, str):
-        phase_blocked = [phase_blocked]
-    if not isinstance(phase_blocked, (list, tuple, set, frozenset)):
-        return False
-    names = set(phase_blocked)
     if tool_name in names:
         return True
     return WILDCARD in names and tool_name not in BLACKBOARD_TOOL_NAMES
+
+
+def tool_blocked(env: Any, tool_name: str, phase: Any) -> bool:
+    """Whether ``tool_name`` is blocked for ``phase`` on ``env``.
+
+    Reads ``env.full_config["simulation"]["phases"]`` (see
+    ``simulation.phases[*].blocked_tools``). Defaults to False when the
+    environment or config is missing, so behavior is unchanged without
+    configured phases.
+    """
+    if env is None:
+        return False
+    full_config = getattr(env, "full_config", None)
+    if not isinstance(full_config, Mapping):
+        return False
+    return tool_blocked_in(full_config.get("simulation"), tool_name, phase)
 
 
 def blocked_response(tool_name: str, phase: Any) -> Dict[str, Any]:

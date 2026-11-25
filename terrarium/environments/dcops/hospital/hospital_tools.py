@@ -111,8 +111,8 @@ class HospitalTools:
                 },
             })
 
-        # Withhold schemas for tools blocked in this phase via
-        # environment.blocked_tools (e.g. "*" blocks all env tools).
+        # Withhold schemas for tools blocked in this phase via the phase's
+        # blocked_tools entry in simulation.phases (e.g. "*" blocks all env tools).
         return [
             tool
             for tool in tools
