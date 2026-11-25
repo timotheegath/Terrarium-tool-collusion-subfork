@@ -58,10 +58,16 @@ simulation:
 - `max_conversation_steps`: maximum LLM/tool loop steps per agent turn.
 - `seed`: random seed for reproducible environment and network generation.
 - `tags` and `note`: optional metadata used for experiment tracking.
-- `phases`: optional list of `{name: str, rounds: int}` entries run in order each iteration; every agent takes a turn per round via the generic `protocol.agent_turn(..., phase=name, round_num=round)`. When absent, resolves to `[{"name": "planning", "rounds": max_planning_rounds or 1}, {"name": "execution", "rounds": 1}]`. Custom phase names are supported: unknown phases get the planning (blackboard-only) toolset and the execution tool instructions.
+- `phases`: optional list of phase entries run in order each iteration; every agent takes a turn per round via the generic `protocol.agent_turn(..., phase=name, round_num=round, phase_config=phase)`. When absent, resolves to `[{name: planning, rounds: max_planning_rounds or 1}, {name: execution, rounds: 1}]`. Custom phase names are supported: unknown phases get the planning (blackboard-only) toolset and the execution tool instructions. Each entry supports:
+  - `name` (str, required): phase name; also selects tool gating and per-phase prompts.
+  - `rounds` (positive int, required): rounds over all agents in this phase.
+  - `blocked_tools` (list of str, optional): tools disabled in this phase. `"*"` blocks all environment tools but never blackboard tools; name blackboard tools (e.g. `post_message`) explicitly to block them. See [Phases](components/phases.md).
+  - `prompt_file` (str, optional): text file appended to every agent's user prompt during this phase. Relative paths resolve against the config file's directory.
+  - `prompt_hook` (str, optional): `"module:callable"` invoked on each agent turn in this phase; the returned string is appended to the user prompt after `prompt_file` text. The hook may accept any of `agent_name`, `agent_context`, `blackboard_context`, `environment`, `phase`, `iteration`, `round_num` (or `**kwargs`).
 
 ```yaml
-# Example: an extra critique round between planning and execution
+# Example: an extra critique round between planning and execution, with its
+# own prompt file and a tool blocklist
 simulation:
   max_iterations: 1
   seed: 42
@@ -70,6 +76,9 @@ simulation:
       rounds: 2
     - name: critique
       rounds: 1
+      prompt_file: prompts/critique.txt     # relative to this config file
+      prompt_hook: my_package.hooks:critique_hook
+      blocked_tools: ["schedule_patient"]   # blocklist only; "*" = all env tools
     - name: execution
       rounds: 1
 ```

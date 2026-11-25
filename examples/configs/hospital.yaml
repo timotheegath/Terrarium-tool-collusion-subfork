@@ -7,6 +7,17 @@ simulation:
   tags:
     - hospital_jobshop_freeform
   note: "Distributed Job Shop Scheduling: Departments schedule Patient workflows."
+  # Optional: explicit per-phase config (overrides max_planning_rounds).
+  # Each entry: name + rounds, plus optional blocked_tools (blocklist;
+  # "*" = all env tools, never blackboard tools), prompt_file (text appended
+  # to the user prompt; relative to this config file), and prompt_hook
+  # ("module:callable" run each turn in the phase).
+  # phases:
+  #   - name: planning
+  #     rounds: 1
+  #   - name: execution
+  #     rounds: 1
+  #     blocked_tools: ["transfer_resources"]
 
 environment:
   name: HospitalEnvironment

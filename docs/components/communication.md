@@ -29,12 +29,13 @@ communication_protocol.bind_environment(environment)
 
 ## Protocol
 
-`SequentialCommunicationProtocol` runs a config-driven phase sequence: by default all agents plan (for `max_planning_rounds` rounds), then all agents execute, once per iteration. During planning, agents can write messages to blackboards. During execution, agents use environment tools to commit task actions. The sequence is driven by `simulation.phases` (see [Quick Start](../quickstart.md#simulation)) and every turn goes through the generic `agent_turn`:
+`SequentialCommunicationProtocol` runs a config-driven phase sequence: by default all agents plan (for `max_planning_rounds` rounds), then all agents execute, once per iteration. During planning, agents can write messages to blackboards. During execution, agents use environment tools to commit task actions. The sequence is driven by `simulation.phases` (see [Quick Start](../quickstart.md#simulation) and [Phases](phases.md)) and every turn goes through the generic `agent_turn`:
 
 ```python
-phases = resolve_phases(config["simulation"])
-# default: [{"name": "planning", "rounds": max_planning_rounds or 1},
-#           {"name": "execution", "rounds": 1}]
+phases = load_phase_prompt_assets(config)
+# default: [{"name": "planning", "rounds": max_planning_rounds or 1, ...},
+#           {"name": "execution", "rounds": 1, ...}]
+# each entry may also carry blocked_tools / prompt_text / prompt_hook
 
 for phase in phases:
     for round_num in range(1, phase["rounds"] + 1):
@@ -53,10 +54,11 @@ for phase in phases:
                 iteration,
                 phase=phase["name"],
                 round_num=round_num,
+                phase_config=phase,
             )
 ```
 
-`agent_planning_turn`/`agent_execution_turn` remain available as thin wrappers around `agent_turn` with the fixed `"planning"`/`"execution"` phase. Custom phase names get sensible defaults: the planning (blackboard-only) toolset and the execution tool instructions.
+`agent_planning_turn`/`agent_execution_turn` remain available as thin wrappers around `agent_turn` with the fixed `"planning"`/`"execution"` phase. Custom phase names get sensible defaults: the planning (blackboard-only) toolset and the execution tool instructions. The forwarded `phase_config` additionally applies the entry's `prompt_file`/`prompt_hook` text to the user prompt and its `blocked_tools` list at both schema and call level.
 
 The important boundary is that the protocol does not score actions. It decides turn order and routes tools. The environment decides whether an action was useful.
 
