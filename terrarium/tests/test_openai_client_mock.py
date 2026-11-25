@@ -1,4 +1,5 @@
 import importlib
+import json
 import os
 import sys
 import types
@@ -303,6 +304,126 @@ class OpenAIClientMockTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updated_context[3]["type"], "function_call_output")
         self.assertEqual(updated_context[3]["call_id"], "call_1")
         self.assertIn("payload", updated_context[3]["output"])
+
+    def test_sanitize_response_input_item_repairs_function_call_arguments(self):
+        module = _import_openai_client_with_mocks()
+        OpenAIClient = module.OpenAIClient
+
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            client = OpenAIClient()
+
+        truncated = SimpleNamespace(
+            type="function_call",
+            call_id="call_1",
+            name="ext_ping",
+            arguments='{"payload": "hel',
+        )
+        sanitized = client._sanitize_response_input_item(truncated)
+        self.assertEqual(sanitized["type"], "function_call")
+        self.assertEqual(json.loads(sanitized["arguments"]), {"payload": "hel"})
+
+        # Valid JSON arguments are kept verbatim.
+        valid = SimpleNamespace(
+            type="function_call",
+            call_id="call_2",
+            name="ext_ping",
+            arguments='{"payload":"hi"}',
+        )
+        sanitized_valid = client._sanitize_response_input_item(valid)
+        self.assertEqual(sanitized_valid["arguments"], '{"payload":"hi"}')
+
+        # Unrepairable arguments are dropped to a valid empty object.
+        garbage = SimpleNamespace(
+            type="function_call",
+            call_id="call_3",
+            name="ext_ping",
+            arguments="not json at all",
+        )
+        sanitized_garbage = client._sanitize_response_input_item(garbage)
+        self.assertEqual(json.loads(sanitized_garbage["arguments"]), {})
+
+    async def test_process_tool_calls_repairs_truncated_function_call_arguments(self):
+        module = _import_openai_client_with_mocks()
+        OpenAIClient = module.OpenAIClient
+
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            client = OpenAIClient()
+
+        function_call = SimpleNamespace(
+            type="function_call",
+            id="msg_bad_id",
+            name="ext_ping",
+            arguments='{"payload": "hel',
+            call_id="call_1",
+        )
+        response = SimpleNamespace(
+            output=[function_call],
+            status="incomplete",
+            incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+        )
+        executed = []
+
+        async def _execute_tool(tool_name, args):
+            executed.append((tool_name, args))
+            return {"status": "ok"}
+
+        context = []
+        with self.assertLogs("terrarium.llm.clients.openai_client", level="WARNING"):
+            tools_executed, updated_context, step_tools = await client.process_tool_calls(
+                response, context, _execute_tool
+            )
+
+        self.assertEqual(tools_executed, 1)
+        self.assertEqual(executed, [("ext_ping", {"payload": "hel"})])
+        self.assertIn("ARGS_REPAIRED_FROM_TRUNCATION", step_tools[0])
+        # The function_call copy appended to the context stays valid JSON.
+        self.assertEqual(updated_context[0]["type"], "function_call")
+        self.assertEqual(json.loads(updated_context[0]["arguments"]), {"payload": "hel"})
+        self.assertEqual(updated_context[1]["type"], "function_call_output")
+        self.assertEqual(updated_context[1]["call_id"], "call_1")
+        self.assertIn("ok", updated_context[1]["output"])
+
+    async def test_process_tool_calls_drops_unrepairable_function_call_arguments(self):
+        module = _import_openai_client_with_mocks()
+        OpenAIClient = module.OpenAIClient
+
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            client = OpenAIClient()
+
+        function_call = SimpleNamespace(
+            type="function_call",
+            id="msg_bad_id",
+            name="ext_ping",
+            arguments="this is not json",
+            call_id="call_1",
+        )
+        response = SimpleNamespace(
+            output=[function_call],
+            status="incomplete",
+            incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+        )
+        executed = []
+
+        async def _execute_tool(tool_name, args):
+            executed.append((tool_name, args))
+            return {"status": "ok"}
+
+        context = []
+        with self.assertLogs("terrarium.llm.clients.openai_client", level="WARNING"):
+            tools_executed, updated_context, step_tools = await client.process_tool_calls(
+                response, context, _execute_tool
+            )
+
+        self.assertEqual(tools_executed, 0)
+        self.assertEqual(executed, [])
+        self.assertIn("ARGS_DROPPED_TRUNCATED", step_tools[0])
+        # Context stays valid JSON and the call/output pairing stays intact.
+        self.assertEqual(updated_context[0]["type"], "function_call")
+        self.assertEqual(json.loads(updated_context[0]["arguments"]), {})
+        self.assertEqual(updated_context[1]["type"], "function_call_output")
+        self.assertEqual(updated_context[1]["call_id"], "call_1")
+        output = json.loads(updated_context[1]["output"])
+        self.assertEqual(output["status"], "error")
 
     async def test_process_tool_calls_skips_message_outputs_in_followup_context(self):
         module = _import_openai_client_with_mocks()

@@ -6,7 +6,14 @@ along with optional helper methods that can be shared across implementations.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, Any
+from typing import Any, Dict, List, Optional, Tuple
+
+from terrarium.llm.clients.tool_args import (
+    close_truncated_json,
+    repair_truncated_json,
+    sanitize_function_call_arguments,
+    sanitize_tool_call_arguments,
+)
 
 
 class AbstractClient(ABC):
@@ -86,6 +93,50 @@ class AbstractClient(ABC):
             Exception: If tool call parsing or execution fails
         """
         pass
+
+    @staticmethod
+    def close_truncated_json(prefix: str) -> Optional[str]:
+        """Close unterminated strings/brackets in a truncated JSON prefix.
+
+        Thin wrapper around :func:`terrarium.llm.clients.tool_args.close_truncated_json`
+        so every client can call it uniformly. Returns ``None`` on structural
+        errors; never invents data.
+        """
+        return close_truncated_json(prefix)
+
+    @staticmethod
+    def repair_truncated_json(text: str) -> Optional[str]:
+        """Best-effort repair of a truncated JSON object string.
+
+        Thin wrapper around :func:`terrarium.llm.clients.tool_args.repair_truncated_json`.
+        Valid JSON passes through untouched; otherwise the first repairable
+        prefix (bounded window) that ``json.loads`` accepts is returned, or
+        ``None``.
+        """
+        return repair_truncated_json(text)
+
+    @staticmethod
+    def sanitize_tool_call_arguments(
+        message: Dict[str, Any],
+    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        """Return ``(sanitized_message, notes)`` for a chat-completions assistant message.
+
+        Thin wrapper around :func:`terrarium.llm.clients.tool_args.sanitize_tool_call_arguments`.
+        Guarantees every ``tool_calls[*].function.arguments`` in the returned
+        copy is a string ``json.loads`` accepts; the input is never mutated.
+        """
+        return sanitize_tool_call_arguments(message)
+
+    @staticmethod
+    def sanitize_function_call_arguments(
+        raw: Any,
+    ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+        """Sanitize one Responses-API ``function_call`` item's ``arguments``.
+
+        Thin wrapper around :func:`terrarium.llm.clients.tool_args.sanitize_function_call_arguments`.
+        Returns ``(args_dict, note)``: parse, repair, or drop to ``{}`` with a note.
+        """
+        return sanitize_function_call_arguments(raw)
 
     def configure_external_mcp(self, llm_config: dict[str, Any]) -> None:
         """

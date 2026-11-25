@@ -12,6 +12,10 @@ from terrarium.llm.clients.azure_common import (
     normalize_openai_v1_base_url,
 )
 from terrarium.llm.clients.openai_client import OpenAIClient
+from terrarium.llm.clients.tool_args import (
+    process_chat_tool_calls,
+    response_indicates_length_truncation,
+)
 
 _DEFAULT_SCOPE = "https://ai.azure.com/.default"
 
@@ -371,28 +375,13 @@ class FoundryClient(OpenAIClient):
         message = self._sanitize_chat_message(choices[0].get("message") or {})
         if message is None:
             message = {"role": "assistant", "content": ""}
-        context.append(message)
-        tool_calls = message.get("tool_calls") or []
-        tool_calls_executed = 0
-        step_tools: List[str] = []
-
-        for call in tool_calls:
-            function_block = call.get("function") or {}
-            tool_name = function_block.get("name", "unknown_tool")
-            arguments_raw = function_block.get("arguments") or "{}"
-            try:
-                arguments = json.loads(arguments_raw)
-            except json.JSONDecodeError:
-                arguments = {}
-            step_tools.append(f"{tool_name} -- {json.dumps(arguments)}")
-            result = await execute_tool_callback(tool_name, arguments)
-            context.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": call.get("id"),
-                    "content": json.dumps(result),
-                }
-            )
-            tool_calls_executed += 1
-
-        return tool_calls_executed, context, step_tools
+        # Sanitize BEFORE the message enters the history: the conversation is
+        # re-POSTed verbatim on the next step, and a truncated
+        # ``function.arguments`` string makes the server reject the whole
+        # request with HTTP 400.
+        return await process_chat_tool_calls(
+            message,
+            context,
+            execute_tool_callback,
+            truncated=response_indicates_length_truncation(response),
+        )
