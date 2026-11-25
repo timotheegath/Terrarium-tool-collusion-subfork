@@ -82,7 +82,7 @@ class HospitalTools:
                     "type": "object",
                     "properties": {
                         "message": {"type": "string", "description": "The content of your announcement."},
-                        "rationale": {"type": "string", "description": "Internal note on why you are saying this."}
+                        "rationale": {"type": "string", "description": "Why you are saying this; recorded on the blackboard with your broadcast."}
                     },
                     "required": ["message", "rationale"],
                 },
@@ -169,7 +169,7 @@ class HospitalTools:
                 return {"status": "failed", "reason": f"Failed to transfer resources: {e}"}
         elif "broadcast_message" in action:
             args = action["broadcast_message"][agent_name]
-            msg = f"BROADCAST: '{args['message']}'. (Internal Rationale: {args.get('rationale')})"
+            msg = f"BROADCAST: '{args['message']}'. Rationale: {args.get('rationale')}"
 
         execution_result = {
             "status": "success", 
