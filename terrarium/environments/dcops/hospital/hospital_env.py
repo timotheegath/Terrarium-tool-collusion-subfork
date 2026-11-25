@@ -216,7 +216,6 @@ class HospitalEnvironment(AbstractEnvironment):
 
         if p_id not in self.patients: 
             raise ScheduleRequestError(f"Unknown patient_id: {p_id}")
-        if p_id not in self.patients: return
         if self.patient_states[p_id]["scheduled_steps"].get(step_idx) is not None:
             prev = self.patient_states[p_id]["scheduled_steps"][step_idx]
             raise ScheduleRequestError(
