@@ -147,7 +147,7 @@ class MeetingSchedulingEnvironment(AbstractEnvironment):
         # Add configuration info
         context["max_iterations"] = self.env_config.get("max_iterations", 1)
 
-        # Add additional context from kwargs (like planning_round)
+        # Add additional context from kwargs (like round_number)
         for key, value in kwargs.items():
             context[key] = value
 

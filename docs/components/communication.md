@@ -48,7 +48,7 @@ await run_phase_entries(
 )
 ```
 
-Pass `on_turn` to observe or record each turn (a dict with the agent, phase, iteration, round, agent context, and result), or `build_turn` to customize a turn before it runs.
+Pass `on_turn` to observe or record each turn (a dict with the agent, phase, iteration, round, agent context, and result), or `build_turn` to customize a turn before it runs. Every turn's agent context is built with `round_number=<round>`, so environments and prompts can read the current round from `agent_context["round_number"]` in any phase.
 
 The important boundary is that the protocol does not score actions. It decides turn order and routes tools. The environment decides whether an action was useful.
 

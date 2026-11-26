@@ -189,7 +189,7 @@ class PersonalAssistantEnvironment(AbstractEnvironment):
         assert self.env_config is not None, "Config not available"
         context["max_iterations"] = self.env_config.get("max_iterations", 1)
 
-        # Add additional context from kwargs (like planning_round)
+        # Add additional context from kwargs (like round_number)
         for key, value in kwargs.items():
             context[key] = value
 
