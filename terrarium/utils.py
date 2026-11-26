@@ -937,6 +937,9 @@ async def run_phase_entries(
     dispatched to the communication protocol: a generic ``agent_turn`` method
     when the protocol defines one, otherwise ``agent_planning_turn`` for the
     ``"planning"`` phase and ``agent_execution_turn`` for every other phase.
+    Every turn's context is built with ``build_agent_context(..., round_number=round)``,
+    so environments and prompts can read the round from ``agent_context["round_number"]``
+    for any phase, not just planning.
 
     Args:
         phase_entries: Phase entries to run, e.g.
@@ -985,13 +988,11 @@ async def run_phase_entries(
                     agents, desc="       Agents", position=2, leave=False, ncols=80
                 )
             for agent in turn_agents:
-                context_kwargs = (
-                    {"planning_round": round_num}
-                    if generic_turn or phase_name == "planning"
-                    else {}
-                )
                 agent_context = environment.build_agent_context(
-                    agent.name, phase=phase_name, iteration=iteration, **context_kwargs
+                    agent.name,
+                    phase=phase_name,
+                    iteration=iteration,
+                    round_number=round_num,
                 )
                 turn = {
                     "agent": agent,

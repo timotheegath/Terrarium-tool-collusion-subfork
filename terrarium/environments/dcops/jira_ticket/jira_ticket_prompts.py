@@ -67,7 +67,7 @@ class JiraTicketPrompts:
                 user_prompt=user_prompt,
                 phase=agent_context.get("phase", "unknown"),
                 iteration=agent_context.get("iteration"),
-                round_num=agent_context.get("planning_round"),
+                round_num=agent_context.get("round_number"),
             )
 
         return user_prompt

@@ -194,7 +194,7 @@ class AbstractEnvironment(ABC):
             agent_name: Name of the agent
             phase: Current phase ("planning" or "execution")
             iteration: Current iteration number
-            **kwargs: Additional context (planning_round, etc.)
+            **kwargs: Additional context (round_number, etc.)
 
         Returns:
             Dictionary with agent context including:

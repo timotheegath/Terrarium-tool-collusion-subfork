@@ -133,7 +133,7 @@ class RunPhaseEntriesTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(turn["agent"], self.agents[0] if turn["agent_name"] == "agent_0" else self.agents[1])
             self.assertIn("result", turn)
 
-    async def test_planning_context_carries_planning_round_execution_does_not(self):
+    async def test_context_carries_round_number_for_every_phase(self):
         await run_phase_entries(
             _entries(),
             environment=self.environment,
@@ -144,8 +144,9 @@ class RunPhaseEntriesTests(unittest.IsolatedAsyncioTestCase):
 
         planning_calls = [c for c in self.environment.context_calls if c["phase"] == "planning"]
         execution_calls = [c for c in self.environment.context_calls if c["phase"] == "execution"]
-        self.assertEqual([c["planning_round"] for c in planning_calls], [1, 1, 2, 2])
-        self.assertTrue(all("planning_round" not in c for c in execution_calls))
+        self.assertEqual([c["round_number"] for c in planning_calls], [1, 1, 2, 2])
+        self.assertEqual([c["round_number"] for c in execution_calls], [1, 1])
+        self.assertTrue(all("planning_round" not in c for c in self.environment.context_calls))
         self.assertTrue(all(c["iteration"] == 1 for c in self.environment.context_calls))
 
     async def test_entry_name_key_and_default_rounds(self):
@@ -263,7 +264,7 @@ class RunPhaseEntriesTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(all(c["phase_config"] is not None for c in protocol.calls))
         self.assertTrue(
-            all("planning_round" in c["agent_context"] for c in protocol.calls)
+            all(c["agent_context"]["round_number"] == c["round_num"] for c in protocol.calls)
         )
         self.assertEqual(len(turns), 6)
 
