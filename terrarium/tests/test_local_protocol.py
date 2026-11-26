@@ -1,11 +1,6 @@
 import unittest
 
-try:
-    from experiments.common.local_protocol import LocalCommunicationProtocol
-except ModuleNotFoundError as exc:
-    if exc.name and exc.name.startswith("experiments"):
-        raise unittest.SkipTest("Optional experiments package is not available") from exc
-    raise
+from terrarium.communication_protocols.local import LocalCommunicationProtocol
 
 
 class _DummyJiraEnvironment:
