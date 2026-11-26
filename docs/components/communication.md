@@ -31,38 +31,24 @@ communication_protocol.bind_environment(environment)
 
 `SequentialCommunicationProtocol` currently runs simple protocol: all agents plan, then all agents execute for one iteration of the simulation. During planning, agents can write messages to blackboards. During execution, agents use environment tools to commit task actions.
 
-```python
-for planning_round in range(1, max_planning_rounds + 1):
-    for agent in environment.agents:
-        agent_context = environment.build_agent_context(
-            agent.name,
-            phase="planning",
-            iteration=iteration,
-            planning_round=planning_round,
-        )
-        await communication_protocol.agent_planning_turn(
-            agent,
-            agent.name,
-            agent_context,
-            environment,
-            iteration,
-            planning_round,
-        )
+The phase walk itself lives in `terrarium.utils.run_phase_entries`: it runs a list of phase entries (a phase name plus a round count) over the agents for one iteration and dispatches each turn to the protocol, so runners share one implementation instead of copy-pasted loops.
 
-for agent in environment.agents:
-    agent_context = environment.build_agent_context(
-        agent.name,
-        phase="execution",
-        iteration=iteration,
-    )
-    await communication_protocol.agent_execution_turn(
-        agent,
-        agent.name,
-        agent_context,
-        environment,
-        iteration,
-    )
+```python
+from terrarium.utils import run_phase_entries
+
+phase_entries = [
+    {"phase": "planning", "rounds": max_planning_rounds},
+    {"phase": "execution", "rounds": 1},
+]
+await run_phase_entries(
+    phase_entries,
+    environment=environment,
+    communication_protocol=communication_protocol,
+    iteration=iteration,
+)
 ```
+
+Pass `on_turn` to observe or record each turn (a dict with the agent, phase, iteration, round, agent context, and result), or `build_turn` to customize a turn before it runs.
 
 The important boundary is that the protocol does not score actions. It decides turn order and routes tools. The environment decides whether an action was useful.
 
