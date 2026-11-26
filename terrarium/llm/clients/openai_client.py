@@ -5,6 +5,10 @@ import random
 import time
 from typing import Dict, Any, List, Optional, Tuple
 from terrarium.llm.clients.abstract_client import AbstractClient
+from terrarium.llm.clients.tool_args import (
+    response_indicates_length_truncation,
+    sanitize_function_call_arguments,
+)
 from openai import OpenAI
 from openai import APIConnectionError, APIStatusError, APITimeoutError, RateLimitError
 from openai.types.responses.response_input_item_param import Message, FunctionCallOutput
@@ -264,11 +268,21 @@ class OpenAIClient(AbstractClient):
             return None
 
         if item_type == "function_call":
+            raw_arguments = cls._get_item_field(item, "arguments")
+            args_dict, note = sanitize_function_call_arguments(raw_arguments)
+            if note is None and isinstance(raw_arguments, str):
+                # Already valid JSON: keep the string verbatim.
+                arguments = raw_arguments
+            else:
+                # Repaired/dropped/missing: re-serialize so the copy appended to
+                # the context is always a string json.loads accepts (a truncated
+                # arguments string makes the server reject the next request).
+                arguments = json.dumps(args_dict)
             sanitized = {
                 "type": "function_call",
                 "call_id": cls._get_item_field(item, "call_id"),
                 "name": cls._get_item_field(item, "name"),
-                "arguments": cls._get_item_field(item, "arguments"),
+                "arguments": arguments,
             }
             item_id = cls._get_item_field(item, "id")
             if isinstance(item_id, str) and item_id.startswith("fc"):
@@ -684,6 +698,7 @@ class OpenAIClient(AbstractClient):
         """
         tool_calls_executed = 0
         step_tools = []
+        truncated = response_indicates_length_truncation(response)
 
         tool_outputs: list[dict[str, Any]] = []
         for output in response.output:
@@ -695,15 +710,42 @@ class OpenAIClient(AbstractClient):
             if output.type == 'function_call':
                 # Extract and execute tool call
                 tool_name = getattr(output, 'name', 'unknown')
-                try:
-                    args = getattr(output, 'arguments', {})
-                    if isinstance(args, str):
-                        args = json.loads(args)
-                except json.JSONDecodeError:
-                    args = {}
+                args, note = sanitize_function_call_arguments(
+                    getattr(output, 'arguments', {})
+                )
+                status = note.get("status") if note else None
                 tool_call_id = getattr(output, 'call_id', getattr(output, 'id', f"call_{tool_name}"))
                 # Track tool call for trajectory
-                step_tools.append(f"{tool_name} -- {json.dumps(args)}")
+                marker = ""
+                if status == "repaired":
+                    marker = f" [ARGS_REPAIRED_FROM_TRUNCATION raw={note.get('raw', '')[:300]!r}]"
+                elif status == "dropped":
+                    marker = f" [ARGS_DROPPED_TRUNCATED raw={note.get('raw', '')[:300]!r}]"
+                step_tools.append(f"{tool_name} -- {json.dumps(args)}{marker}")
+                if truncated and status in ("repaired", "dropped"):
+                    logger.warning(
+                        "tool call arguments were truncated by the model "
+                        "(finish_reason=length) for tool %r; arguments %s",
+                        tool_name,
+                        "repaired from the partial JSON"
+                        if status == "repaired"
+                        else "dropped (could not be repaired)",
+                    )
+                if status == "dropped":
+                    # Do not execute, but keep the function_call/function_call_output
+                    # pairing valid: the API requires an output for every call_id.
+                    tool_outputs.append({
+                        "type": "function_call_output",
+                        "call_id": tool_call_id,
+                        "output": json.dumps({
+                            "status": "error",
+                            "result": (
+                                "tool call dropped: the model's arguments were "
+                                "truncated and could not be repaired"
+                            ),
+                        }),
+                    })
+                    continue
                 # Execute the tool
                 result = await execute_tool_callback(tool_name, args)
                 # Add tool result to context (after the function_call)
