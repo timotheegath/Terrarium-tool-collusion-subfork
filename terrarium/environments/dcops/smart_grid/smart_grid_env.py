@@ -24,9 +24,7 @@ from terrarium.environments.abstract_environment import AbstractEnvironment
 from terrarium.utils import (
     clear_seed_directories,
     extract_model_info,
-    get_tag_model_subdir,
     get_run_timestamp,
-    build_log_dir,
 )
 
 from .smartgrid_prompts import SmartGridPrompts
@@ -221,8 +219,7 @@ class SmartGridEnvironment(AbstractEnvironment):
         for agent, reward in agent_rewards.items():
             self.agent_rewards_history.setdefault(agent, []).append(reward)
 
-        tag_model = get_tag_model_subdir(self.full_config)
-        log_dir = build_log_dir(self.__class__.__name__, tag_model, self.current_seed, self.run_timestamp)
+        log_dir = self._resolve_log_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
 
         score_entry = {

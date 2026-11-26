@@ -7,9 +7,7 @@ from terrarium.environments.abstract_environment import AbstractEnvironment
 from terrarium.utils import (
     clear_seed_directories,
     extract_model_info,
-    get_tag_model_subdir,
     get_run_timestamp,
-    build_log_dir,
 )
 from .jira_ticket_prompts import JiraTicketPrompts
 
@@ -445,8 +443,7 @@ class JiraTicketEnvironment(AbstractEnvironment):
             if agent in self.agent_rewards_history:
                 self.agent_rewards_history[agent].append(float(reward))
 
-        tag_model = get_tag_model_subdir(self.full_config)
-        log_dir = build_log_dir(self.__class__.__name__, tag_model, self.current_seed, self.run_timestamp)
+        log_dir = self._resolve_log_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
 
         coverage, cost_gap, norm_score = self._normalized_metrics(eval_result)

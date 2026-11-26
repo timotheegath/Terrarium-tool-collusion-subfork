@@ -12,6 +12,7 @@ from typing import Dict, List, Any, Optional, Sequence
 from terrarium.core.logger import BlackboardLogger, PromptLogger
 from collections.abc import Mapping
 from terrarium.networks.base import CommunicationNetwork
+from terrarium.utils import build_log_dir, get_log_root_dir, get_tag_model_subdir
 
 import logging
 logger = logging.getLogger(__name__)
@@ -289,6 +290,32 @@ class AbstractEnvironment(ABC):
                     env_logger.info("%s: %s", key, value)
 
         return final_summary
+
+    def _resolve_log_dir(self) -> Path:
+        """
+        Resolve the directory for per-run artifacts the environment writes
+        itself (iteration data, scenario snapshots, ...).
+
+        Prefers the run directory of the attached tool logger: experiment
+        runners pass a logger whose ``log_dir`` is the run dir, so artifacts
+        land inside ``outputs/.../runs/<model>/<sweep>/<run_id>/`` next to
+        ``tool_calls.json`` instead of a repo-root ``logs/`` tree. Falls back
+        to the standard ``<log_root>/<env>/<tag_model>/<timestamp>/seed_<seed>``
+        layout, with ``log_root`` taken from the ``logging.root_dir`` config
+        key (default ``logs/``).
+        """
+        tool_logger = getattr(self, "tool_logger", None)
+        log_dir = getattr(tool_logger, "log_dir", None)
+        if log_dir is not None:
+            return Path(log_dir)
+        full_config = getattr(self, "full_config", None) or {}
+        return build_log_dir(
+            self.__class__.__name__,
+            get_tag_model_subdir(full_config),
+            getattr(self, "current_seed", 0),
+            getattr(self, "run_timestamp", None),
+            log_root=get_log_root_dir(full_config),
+        )
 
     def log_iteration_summary(self, iteration: int) -> None:
         """Log a summary header for an iteration then delegate to log_iteration()."""

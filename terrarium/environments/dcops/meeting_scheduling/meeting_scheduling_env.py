@@ -25,9 +25,7 @@ from terrarium.environments.abstract_environment import AbstractEnvironment
 from terrarium.utils import (
     clear_seed_directories,
     extract_model_info,
-    get_tag_model_subdir,
     get_run_timestamp,
-    build_log_dir,
 )
 from .meeting_scheduling_prompts import MeetingSchedulingPrompts
 
@@ -253,9 +251,7 @@ class MeetingSchedulingEnvironment(AbstractEnvironment):
                 self.agent_rewards_history[agent].append(reward)
 
         # Create logs directory with seed subdirectory
-        # Get tag_model subdirectory
-        tag_model = get_tag_model_subdir(self.full_config)
-        log_dir = build_log_dir(self.__class__.__name__, tag_model, self.current_seed, self.run_timestamp)
+        log_dir = self._resolve_log_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
 
         # Log scores to JSON

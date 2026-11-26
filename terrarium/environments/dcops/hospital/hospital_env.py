@@ -3,7 +3,7 @@ import math
 import json
 import random
 from typing import Dict, List, Any, Tuple
-from terrarium.utils import get_run_timestamp, build_log_dir, get_tag_model_subdir
+from terrarium.utils import get_run_timestamp
 from terrarium.environments.abstract_environment import AbstractEnvironment
 from .hospital_prompts import HospitalPrompts
 
@@ -683,8 +683,7 @@ class HospitalEnvironment(AbstractEnvironment):
         s, r = self._calculate_makespan_and_flow()
         self.joint_reward_history.append(s)
         for a, v in r.items(): self.agent_rewards_history[a].append(v)
-        tag = get_tag_model_subdir(self.full_config)
-        log_dir = build_log_dir(self.__class__.__name__, tag, self.current_seed, self.run_timestamp)
+        log_dir = self._resolve_log_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
         if iteration == 1:
             with open(log_dir / "patients.json", "w") as f:
