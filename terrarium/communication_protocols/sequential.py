@@ -35,12 +35,13 @@ class SequentialCommunicationProtocol(BaseCommunicationProtocol):
         config: Dict[str, Any],
         tool_logger: Any,
         run_timestamp: Optional[str] = None,
+        blackboard_logger: Optional[BlackboardLogger] = None,
     ):
         self.config = config
         self.simulation_config = config["simulation"]
         self.tool_logger = tool_logger
         self.run_timestamp = run_timestamp
-        self.blackboard_logger = BlackboardLogger(
+        self.blackboard_logger = blackboard_logger or BlackboardLogger(
             self.config, run_timestamp=self.run_timestamp
         )
         self.blackboard_logger.clear_blackboard_logs()
