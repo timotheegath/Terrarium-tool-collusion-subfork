@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .blackboard import Blackboard
-from terrarium.utils import get_tag_model_subdir, get_run_timestamp, build_log_dir
+from terrarium.utils import (
+    get_tag_model_subdir,
+    get_run_timestamp,
+    get_log_root_dir,
+    build_log_dir,
+)
 
 
 def _resolve_run_timestamp(
@@ -221,13 +226,22 @@ class BlackboardLogger:
     Now supports multiple blackboards with separate log files.
     """
 
-    def __init__(self, config: Dict[str, Any], run_timestamp: Optional[str] = None):
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        run_timestamp: Optional[str] = None,
+        log_dir: Optional[Path] = None,
+    ):
         """
         Initialize the blackboard logger.
 
         Args:
             config: Full configuration dictionary containing all simulation settings
             run_timestamp: Optional run timestamp override for log directory naming
+            log_dir: Optional explicit directory for the blackboard logs. When omitted,
+                the log root is resolved from the `logging.root_dir` config key (default
+                `logs/`) and the standard
+                <root>/<env>/<tag_model>/<timestamp>/seed_<seed> layout is used
         """
         self.session_start = time.time()
         self.config = config
@@ -235,12 +249,16 @@ class BlackboardLogger:
         self.seed = self.config["simulation"]["seed"]
         self.tag_model = get_tag_model_subdir(self.config)
         self.run_timestamp = _resolve_run_timestamp(self.config, run_timestamp)
-        self.log_root = build_log_dir(
-            self.environment_name,
-            self.tag_model,
-            self.seed,
-            self.run_timestamp,
-        )
+        if log_dir is not None:
+            self.log_root = Path(log_dir)
+        else:
+            self.log_root = build_log_dir(
+                self.environment_name,
+                self.tag_model,
+                self.seed,
+                self.run_timestamp,
+                log_root=get_log_root_dir(self.config),
+            )
         self.log_root.mkdir(parents=True, exist_ok=True)
 
         # Track log files for each blackboard
