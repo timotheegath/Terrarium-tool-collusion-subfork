@@ -1,6 +1,6 @@
 import json
 import unittest
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set
 
 from terrarium.agents.base import BaseAgent
 
@@ -13,12 +13,19 @@ class _DummyToolsetDiscovery:
         return set()
 
     def get_blackboard_tool_names(
-        self, environment_name: str = "", retrieval_enabled: bool = False
+        self,
+        environment_name: str = "",
+        retrieval_enabled: bool = False,
+        allowed_tools: Optional[Set[str]] = None,
     ) -> Set[str]:
         return set()
 
     def get_tools_for_blackboard(
-        self, phase: str, environment_name: str = "", retrieval_enabled: bool = False
+        self,
+        phase: str,
+        environment_name: str = "",
+        retrieval_enabled: bool = False,
+        allowed_tools: Optional[Set[str]] = None,
     ) -> List[Dict[str, Any]]:
         return []
 

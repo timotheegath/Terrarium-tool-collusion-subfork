@@ -7,6 +7,11 @@ from terrarium.tools.environment import (
 
 
 class ToolsetDiscovery:
+    # Phases that expose the blackboard toolset (planning-shaped). Class
+    # attribute so a runner can extend it per instance (e.g. add a custom
+    # coordination phase) without patching the class.
+    planning_shaped_phases: Set[str] = {"planning"}
+
     def __init__(self):
         self._tools_by_environment: Dict[str, Any] = {}
 
@@ -67,10 +72,19 @@ class ToolsetDiscovery:
         return bool(getattr(tools, "supports_private_channels", False))
 
     def get_blackboard_tool_names(
-        self, environment_name: str = "", retrieval_enabled: bool = False
+        self,
+        environment_name: str = "",
+        retrieval_enabled: bool = False,
+        allowed_tools: Optional[Set[str]] = None,
     ) -> Set[str]:
         """
         Get the set of tool names that this blackboard manager supports.
+
+        Args:
+            environment_name: Canonical environment identifier (prefer passing environment.__class__.__name__)
+            retrieval_enabled: Whether the `recall` tool is offered
+            allowed_tools: Optional allowlist; when given, the result is
+                intersected with it (`set()` withholds every blackboard tool)
 
         Returns:
             Set of supported tool names
@@ -80,14 +94,30 @@ class ToolsetDiscovery:
             names.add("create_channel")
         if retrieval_enabled:
             names.add("recall")
+        if allowed_tools is not None:
+            names = names & set(allowed_tools)
         return names
 
     def get_tools_for_blackboard(
-        self, phase: str, environment_name: str = "", retrieval_enabled: bool = False
+        self,
+        phase: str,
+        environment_name: str = "",
+        retrieval_enabled: bool = False,
+        allowed_tools: Optional[Set[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """Get blackboard specific tools for the given phase. This is different from Environment tools."""
+        """Get blackboard specific tools for the given phase. This is different from Environment tools.
+
+        Args:
+            phase: Current phase; blackboard tools are offered for every phase
+                in `planning_shaped_phases`
+            environment_name: Canonical environment identifier (prefer passing environment.__class__.__name__)
+            retrieval_enabled: Whether the `recall` tool is offered
+            allowed_tools: Optional allowlist of tool names; when given, the
+                returned tools are intersected with it (`set()` withholds
+                every blackboard tool)
+        """
         # Add phase-specific tools
-        if phase == "planning":
+        if phase in self.planning_shaped_phases:
             planning_tools = [
                 {
                     "type": "function",
@@ -173,6 +203,13 @@ class ToolsetDiscovery:
                         },
                     }
                 )
+            if allowed_tools is not None:
+                allowed = set(allowed_tools)
+                planning_tools = [
+                    tool
+                    for tool in planning_tools
+                    if tool.get("function", {}).get("name") in allowed
+                ]
             return planning_tools
 
         return []

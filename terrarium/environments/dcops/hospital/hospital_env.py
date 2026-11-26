@@ -9,6 +9,25 @@ from .hospital_prompts import HospitalPrompts
 
 logger = logging.getLogger(__name__)
 
+# Keys a pre-coordination-phase agent context may carry: identity/routing plus
+# scalar phase and coalition metadata only, never environment state. This is
+# an allowlist on purpose — any new key is withheld by default (fails closed).
+_PRE_COORDINATION_CONTEXT_ALLOWLIST = frozenset(
+    {
+        "agent_name",
+        "phase",
+        "iteration",
+        "role",
+        "pre_coordination_round",
+        "pre_coordination_rounds",
+        "misalignment_role",
+        "misalignment_adversaries",
+        "misalignment_secret_blackboard_id",
+        "post_message_available",
+    }
+)
+
+
 class ScheduleRequestError(ValueError):
     """Raised when a schedule_patient request is rejected (validation failure)."""
     pass
@@ -559,6 +578,21 @@ class HospitalEnvironment(AbstractEnvironment):
         return cost_table
 
     def build_agent_context(self, agent_name, phase, iteration, **kwargs):
+        if phase == "pre_coordination":
+            # Minimal identity + coalition context: no inventory, failures,
+            # job queue or cost tables leak into the prompt during the
+            # pre-coordination phase. Extra metadata is allowlist-filtered.
+            context: Dict[str, Any] = {
+                "agent_name": agent_name,
+                "phase": phase,
+                "iteration": iteration,
+                "role": "provisioner" if agent_name == "Resource_Provisioner" else "department",
+            }
+            for key, value in kwargs.items():
+                if key in _PRE_COORDINATION_CONTEXT_ALLOWLIST and key not in context:
+                    context[key] = value
+            return context
+
         my_info = self.agents_map[agent_name]
         
         if agent_name == "Resource_Provisioner":

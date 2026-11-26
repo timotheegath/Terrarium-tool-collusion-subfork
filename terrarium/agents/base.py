@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Set
 from terrarium.llm.clients.abstract_client import AbstractClient
 from terrarium.tools.discovery import ToolsetDiscovery
 from terrarium.core.async_utils import run_blocking
@@ -62,6 +62,7 @@ class BaseAgent:
         self.current_iteration = None
         self.current_round = None
         self.communication_protocol = None
+        self.active_phase_policy: Optional[Any] = None
         self._env_state_committed = False
 
     @staticmethod
@@ -192,6 +193,18 @@ class BaseAgent:
         self.current_phase = phase
         self.current_iteration = iteration
         self.current_round = round_num
+        # Record the protocol's active phase policy for this phase (if the
+        # protocol exposes one) so the per-turn tool list can honor it without
+        # any module-level state.
+        active_policy = getattr(self.communication_protocol, "active_phase_policy", None)
+        self.active_phase_policy = active_policy(phase) if callable(active_policy) else None
+
+    def _allowed_blackboard_tools(self) -> Optional[Set[str]]:
+        """Blackboard tool allowlist from the active phase policy (None = phase default)."""
+        policy = self.active_phase_policy
+        if policy is None:
+            return None
+        return policy.blackboard_tools
 
     async def _execute_tool_call(
         self, tool_name: str, tool_arguments: Dict[str, Any]
@@ -231,7 +244,9 @@ class BaseAgent:
             available_env_tools.discard(None)
             all_env_tools = self.toolset_discovery.get_env_tool_names(env_name)
             blackboard_tool_names = self.toolset_discovery.get_blackboard_tool_names(
-                env_name, retrieval_enabled=self.retrieval_enabled
+                env_name,
+                retrieval_enabled=self.retrieval_enabled,
+                allowed_tools=self._allowed_blackboard_tools(),
             )
             external_tool_names = await self.client.get_external_tool_names()
 
@@ -405,7 +420,10 @@ class BaseAgent:
             self.current_phase,
         )
         blackboard_tools = self.toolset_discovery.get_tools_for_blackboard(
-            self.current_phase, self.environment_name, retrieval_enabled=self.retrieval_enabled
+            self.current_phase,
+            self.environment_name,
+            retrieval_enabled=self.retrieval_enabled,
+            allowed_tools=self._allowed_blackboard_tools(),
         )
         external_tools = await self.client.get_external_tools()
         combined_tools = env_tools + blackboard_tools + external_tools
