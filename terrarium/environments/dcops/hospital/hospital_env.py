@@ -90,6 +90,15 @@ class HospitalEnvironment(AbstractEnvironment):
 
         self.max_time_horizon = 168
         self.transfer_penalty_hours = 4
+
+        # Execution-round mechanics, active when tools receive a round number:
+        # at most `max_schedules_per_round` bookings per agent per round, and a
+        # seeded dice roll (drawn from the same RNG stream seeded above with
+        # simulation.seed) decides same-round conflicts on a (patient, step).
+        self.max_schedules_per_round = self.env_config.get("max_schedules_per_round", 1)
+        if self.max_schedules_per_round is not None:
+            self.max_schedules_per_round = int(self.max_schedules_per_round)
+        self.schedule_conflict_dice = bool(self.env_config.get("schedule_conflict_dice", True))
         self.theoretical_max_score = len(self.patients) * 1000.0 
         self.joint_reward_history = []
         self.agent_rewards_history = {a: [] for a in self.agent_names}
@@ -228,19 +237,36 @@ class HospitalEnvironment(AbstractEnvironment):
             else:
                 logger.warning(f"TRANSFER FAILED [{sender_id}]: Requested {amt} {res_type}, had {available}.")
 
-    def _process_schedule_request(self, agent_id, action):
+    def _process_schedule_request(self, agent_id, action, round_num=None):
         p_id, step_idx, start = action.get("patient_id"), action.get("step_index"), action.get("start_time")
         
-        logger.info(f"SCHEDULE [{agent_id}]: Patient {p_id} @ {start}.")
+        logger.info(f"SCHEDULE [{agent_id}]: Patient {p_id} @ {start} (round {round_num}).")
 
         if p_id not in self.patients: 
             raise ScheduleRequestError(f"Unknown patient_id: {p_id}")
-        if self.patient_states[p_id]["scheduled_steps"].get(step_idx) is not None:
-            prev = self.patient_states[p_id]["scheduled_steps"][step_idx]
-            raise ScheduleRequestError(
-                f"{p_id} step {step_idx} already scheduled by {prev['agent']} "
-                f"at [{prev['start_time']}, {prev['end_time']})"
+        incumbent = self.patient_states[p_id]["scheduled_steps"].get(step_idx)
+        dice_challenge = False
+        if incumbent is not None:
+            same_round = (
+                round_num is not None
+                and incumbent.get("round") is not None
+                and incumbent.get("round") == round_num
+                and incumbent["agent"] != agent_id
             )
+            if (
+                same_round
+                and self.schedule_conflict_dice
+                and not self._has_downstream_bookings(p_id, step_idx)
+            ):
+                # Two units claimed the same (patient, step) within one execution
+                # round: a seeded dice roll decides the winner, but only after all
+                # other validations below pass (so a loser never mutates state).
+                dice_challenge = True
+            else:
+                raise ScheduleRequestError(
+                    f"{p_id} step {step_idx} already scheduled by {incumbent['agent']} "
+                    f"at [{incumbent['start_time']}, {incumbent['end_time']})"
+                )
 
         patient = self.patients[p_id]
         if step_idx < 0 or step_idx >= len(patient["pathway"]):
@@ -289,11 +315,43 @@ class HospitalEnvironment(AbstractEnvironment):
                     f"{agent_id} is at full capacity ({agent_info['capacity']}) at time {t}; "
                     f"cannot fit {p_id} step {step_idx} starting at {start}"
                 )
-            
+
+        if round_num is not None and self.max_schedules_per_round is not None:
+            booked_this_round = sum(
+                1
+                for state in self.patient_states.values()
+                for entry in state["scheduled_steps"].values()
+                if entry.get("agent") == agent_id and entry.get("round") == round_num
+            )
+            if booked_this_round >= self.max_schedules_per_round:
+                raise ScheduleRequestError(
+                    f"{agent_id} already scheduled {booked_this_round} patient step(s) "
+                    f"in round {round_num} (limit {self.max_schedules_per_round} per round)"
+                )
+
+        if dice_challenge:
+            winner = random.choice([incumbent["agent"], agent_id])
+            if winner != agent_id:
+                raise ScheduleRequestError(
+                    f"{p_id} step {step_idx} was claimed by {incumbent['agent']} in round "
+                    f"{round_num}; dice roll lost, booking stays with {incumbent['agent']}"
+                )
+            self._rollback_schedule(incumbent["agent"], p_id, step_idx)
+            logger.info(
+                f"DICE [{p_id} step {step_idx}] round {round_num}: {agent_id} beat "
+                f"{incumbent['agent']}, released [{incumbent['start_time']}, {incumbent['end_time']})"
+            )
+
         hospital = agent_info["hospital"]
         service = agent_info["service"]
         costs = self.consumption_map.get(service, {})
-        
+
+        rollback_snapshot = {
+            "inventory": dict(self.inventory[hospital]),
+            "resource_failures": dict(self.resource_failures),
+            "hospital_failures": dict(self.hospital_failures.get(hospital, {})),
+            "rf_len": len(self.patient_states[p_id].get("resource_failures", [])),
+        }
         missing = []
         for res, req_amt in costs.items():
             if self.inventory[hospital].get(res, 0) >= req_amt:
@@ -320,8 +378,37 @@ class HospitalEnvironment(AbstractEnvironment):
             self.schedule[agent_id][t].append(p_id)
             
         self.patient_states[p_id]["scheduled_steps"][step_idx] = {
-            "agent": agent_id, "start_time": start, "end_time": start + dur
+            "agent": agent_id, "start_time": start, "end_time": start + dur,
+            "round": round_num, "rollback": rollback_snapshot,
         }
+
+    def _has_downstream_bookings(self, p_id: str, step_idx: int) -> bool:
+        sched = self.patient_states[p_id]["scheduled_steps"]
+        return any(int(k) > int(step_idx) for k in sched)
+
+    def _rollback_schedule(self, agent_id: str, p_id: str, step_idx: int) -> None:
+        """Undo a committed booking (used when a same-round dice roll reassigns it)."""
+        entry = self.patient_states[p_id]["scheduled_steps"].pop(step_idx, None)
+        if not entry:
+            return
+        for t in range(int(entry["start_time"]), int(entry["end_time"])):
+            bucket = self.schedule.get(agent_id, {}).get(t)
+            if bucket and p_id in bucket:
+                bucket.remove(p_id)
+                if not bucket:
+                    self.schedule[agent_id].pop(t, None)
+        snapshot = entry.get("rollback") or {}
+        hospital = self.agents_map[agent_id]["hospital"]
+        if "inventory" in snapshot:
+            self.inventory[hospital] = dict(snapshot["inventory"])
+        if "resource_failures" in snapshot:
+            self.resource_failures = dict(snapshot["resource_failures"])
+        if "hospital_failures" in snapshot and hospital in self.hospital_failures:
+            self.hospital_failures[hospital] = dict(snapshot["hospital_failures"])
+        if "rf_len" in snapshot:
+            failures = self.patient_states[p_id].setdefault("resource_failures", [])
+            del failures[int(snapshot["rf_len"]):]
+        logger.info(f"ROLLBACK [{agent_id}]: released {p_id} step {step_idx}")
 
     def _calculate_makespan_and_flow(self):
         """
