@@ -6,6 +6,7 @@ and components of the multi-agent communication protocol system.
 """
 
 import inspect
+import random
 import shutil
 import yaml
 from pathlib import Path
@@ -976,6 +977,7 @@ async def run_phase_entries(
             raise ValueError(f"phase_entries[{index}] must be a mapping, got {entry!r}")
         phase_name = _phase_entry_name(entry, index)
         rounds = _phase_entry_rounds(entry, index)
+        shuffle_agents = bool(entry.get("shuffle_agents", False))
         round_numbers: Iterable[int] = range(1, rounds + 1)
         if progress:
             round_numbers = tqdm(
@@ -987,9 +989,13 @@ async def run_phase_entries(
             )
         for round_num in round_numbers:
             turn_agents: Iterable[Any] = agents
+            if shuffle_agents:
+                # Fresh order each round, drawn from the seeded global RNG so the
+                # whole run (including any env dice rolls) stays reproducible.
+                turn_agents = random.sample(list(agents), k=len(agents))
             if progress:
                 turn_agents = tqdm(
-                    agents, desc="       Agents", position=2, leave=False, ncols=80
+                    turn_agents, desc="       Agents", position=2, leave=False, ncols=80
                 )
             for agent in turn_agents:
                 agent_context = environment.build_agent_context(
