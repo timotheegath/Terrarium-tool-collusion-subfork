@@ -74,6 +74,19 @@ class TerrariumSmokeTests(unittest.TestCase):
             {"max_tokens": 1500, "temperature": 0.7},
         )
 
+    def test_generation_params_passthrough_includes_reasoning_effort(self):
+        cfg = {
+            "provider": "openai_compatible",
+            "openai_compatible": {
+                "model": "zai-org/GLM-5.3-Flash",
+                "params": {"max_tokens": 16384, "reasoning_effort": "high"},
+            },
+        }
+        self.assertEqual(
+            get_generation_params(cfg),
+            {"max_tokens": 16384, "reasoning_effort": "high"},
+        )
+
     def test_foundry_endpoint_can_come_from_named_env_var(self):
         with patch.dict(
             "os.environ",

@@ -218,6 +218,31 @@ class OpenAIClientMockTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(response, fake_response)
         self.assertEqual(response_str, "preferred-output-text")
 
+    def test_generate_response_keeps_explicit_reasoning_effort_for_non_gpt5_model(self):
+        module = _import_openai_client_with_mocks()
+        OpenAIClient = module.OpenAIClient
+
+        fake_response = SimpleNamespace(output=[], output_text="ok")
+
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            client = OpenAIClient(stream=False)
+            sdk_instance = _FakeOpenAI.instances[-1]
+            sdk_instance.responses.next_response = fake_response
+
+            context = client.init_context("system", "user")
+            client.generate_response(
+                input=context,
+                params={"model": "custom-local-model", "reasoning_effort": "high"},
+            )
+            client.generate_response(
+                input=context,
+                params={"model": "custom-local-model"},
+            )
+
+        with_effort, without_effort = sdk_instance.responses.calls
+        self.assertEqual(with_effort["reasoning"], {"effort": "high"})
+        self.assertNotIn("reasoning", without_effort)
+
     def test_generate_response_sanitizes_followup_items(self):
         module = _import_openai_client_with_mocks()
         OpenAIClient = module.OpenAIClient

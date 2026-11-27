@@ -14,6 +14,10 @@ _DEFAULT_GROK_BASE_URL = "https://api.x.ai/v1"
 class GrokClient(OpenAIClient):
     """First-party xAI Grok client using xAI's OpenAI-compatible Responses API."""
 
+    # xAI's API does not accept the Responses API ``reasoning`` object, so an
+    # explicit ``reasoning_effort`` param is never forwarded as one.
+    _forward_explicit_reasoning_effort = False
+
     def __init__(
         self,
         *,

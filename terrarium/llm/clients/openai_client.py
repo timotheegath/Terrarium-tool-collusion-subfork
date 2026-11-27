@@ -98,6 +98,12 @@ class OpenAIClient(AbstractClient):
     # behavior is unchanged.
     _stream_default: bool = True
 
+    # Whether an explicit ``reasoning_effort`` request param is forwarded as
+    # the Responses API ``reasoning`` object even when the model name is not
+    # in the GPT-5 family. Providers whose API rejects that object (Grok) set
+    # this to False.
+    _forward_explicit_reasoning_effort: bool = True
+
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         cls._stream_default = False
@@ -610,9 +616,14 @@ class OpenAIClient(AbstractClient):
         # Remove temperature for reasoning/restricted models
         if self._is_reasoning_model(capability_model) or self._has_temperature_restrictions(capability_model):
             api_params.pop("temperature", None)
-        # Remove GPT-5 specific parameters for non-GPT-5 models
+        # Remove GPT-5 specific parameters for non-GPT-5 models, unless the
+        # caller explicitly requested them via config params
         if "gpt-5" not in capability_model.lower():
-            api_params.pop("reasoning", None)
+            if (
+                params.get("reasoning_effort") is None
+                or not self._forward_explicit_reasoning_effort
+            ):
+                api_params.pop("reasoning", None)
             api_params.pop("text", None)
         # Remove all None values from api_params
         api_params = {k: v for k, v in api_params.items() if v is not None}
