@@ -95,7 +95,11 @@ class HospitalTools:
                 "type": "function",
                 "function": {
                     "name": "schedule_patient",
-                    "description": "Book a time slot. Consumes inventory.",
+                    "description": (
+                        "Book a time slot. Consumes inventory. At most one booking per "
+                        "execution round; if two units claim the same patient step in the "
+                        "same round, a dice roll decides who gets it.
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -118,6 +122,7 @@ class HospitalTools:
         arguments: Dict[str, Any],
         phase: Optional[str] = None,
         iteration: Optional[int] = None,
+        round_num: Optional[int] = None,
     ) -> Dict[str, Any]:
         if self.environment is None:
             return {"error": "Environment not initialized for tools."}
@@ -141,7 +146,7 @@ class HospitalTools:
         else:
             return {"error": f"Tool {tool_name} not found."}
 
-        return self.execute_action(agent_name, action, True, phase, iteration)
+        return self.execute_action(agent_name, action, True, phase, iteration, round_num)
 
     def execute_action(
         self,
@@ -150,14 +155,16 @@ class HospitalTools:
         log_to_blackboards: bool = True,
         phase: Optional[str] = None,
         iteration: Optional[int] = None,
+        round_num: Optional[int] = None,
     ) -> Dict[str, Any]:
         
         msg = "Action Executed."
         if "schedule" in action:
             args = action["schedule"][agent_name]
-            msg = f"Scheduling {args['patient_id']}. Rationale: {args.get('rationale')}"
+            round_note = f" (round {round_num})" if round_num is not None else ""
+            msg = f"Scheduling {args['patient_id']}{round_note}. Rationale: {args.get('rationale')}"
             try:
-                self.environment._process_schedule_request(agent_name, args)
+                self.environment._process_schedule_request(agent_name, args, round_num=round_num)
             except Exception as e:
                 return {"status": "failed", "reason": f"Failed to schedule patient: {e}"}
         elif "transfers" in action:
