@@ -29,6 +29,18 @@ model_name = get_model_name(provider, llm_config)
 generation_params = get_generation_params(llm_config)
 ```
 
+Everything under `params:` is forwarded to the client as request parameters, so provider-specific keys work too. For the `openai` and `openai_compatible` providers, `reasoning_effort` (e.g. `low`/`medium`/`high`) is sent to the endpoint as the Responses API `reasoning.effort` — useful for reasoning models served through an OpenAI-compatible gateway:
+
+```yaml
+llm:
+  provider: openai_compatible
+  openai_compatible:
+    model: zai-org/GLM-5.3-Flash
+    params:
+      max_tokens: 16384
+      reasoning_effort: high
+```
+
 ## Provider Clients
 
 Terrarium includes clients for OpenAI-compatible and provider-specific APIs, including OpenAI, Foundry, Grok, Anthropic, Gemini, Together, Fireworks, and vLLM. API keys and endpoints are usually resolved from environment variables so configs can be shared without secrets.

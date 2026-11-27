@@ -242,6 +242,28 @@ class OpenAICompatibleClientTests(unittest.TestCase):
         self.assertEqual(call["model"], "my-local-chat-model")
         self.assertEqual(call["temperature"], 0.7)
 
+    def test_explicit_reasoning_effort_forwarded_for_non_gpt5_model(self):
+        module = _import_openai_compatible_client_with_mocks()
+        client = self._make_client(module)
+        sdk_instance = _FakeOpenAI.instances[-1]
+        context = client.init_context("system", "user")
+        client.generate_response(
+            input=context,
+            params={
+                "model": "zai-org/GLM-5.3-Flash",
+                "max_output_tokens": 128,
+                "reasoning_effort": "high",
+            },
+        )
+        client.generate_response(
+            input=context,
+            params={"model": "zai-org/GLM-5.3-Flash", "max_output_tokens": 128},
+        )
+
+        with_effort, without_effort = sdk_instance.responses.calls[-2:]
+        self.assertEqual(with_effort["reasoning"], {"effort": "high"})
+        self.assertNotIn("reasoning", without_effort)
+
     def _make_client(self, module, **kwargs):
         with patch.dict(
             os.environ,
