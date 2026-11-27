@@ -132,9 +132,10 @@ async def run_simulation(config: Dict[str, Any]) -> bool:
 
         max_iterations = config["simulation"].get("max_iterations", 1)
         max_planning_rounds = config["simulation"].get("max_planning_rounds", 1)
+        max_execution_rounds = config["simulation"].get("max_execution_rounds", 1)
         phase_entries = [
             {"phase": "planning", "rounds": max_planning_rounds},
-            {"phase": "execution", "rounds": 1},
+            {"phase": "execution", "rounds": max_execution_rounds, "shuffle_agents": True},
         ]
         try:
             with logging_redirect_tqdm():

@@ -9,6 +9,7 @@ from terrarium.core.blackboard import Megaboard, format_blackboard_events_for_pr
 from terrarium.communication_protocols.base import BaseCommunicationProtocol
 from terrarium.tools.environment import (
     EnvironmentToolsNotFoundError,
+    call_env_tool,
     instantiate_environment_tools,
 )
 from terrarium.core.logger import BlackboardLogger
@@ -166,10 +167,17 @@ class SequentialCommunicationProtocol(BaseCommunicationProtocol):
         arguments: Dict[str, Any],
         phase: Optional[str] = None,
         iteration: Optional[int] = None,
+        round_num: Optional[int] = None,
     ) -> Dict[str, Any]:
         self._ensure_environment_tools_initialized()
-        response = self.environment_tools.handle_tool_call(
-            tool_name, agent_name, arguments, phase, iteration
+        response = call_env_tool(
+            self.environment_tools,
+            tool_name,
+            agent_name,
+            arguments,
+            phase=phase,
+            iteration=iteration,
+            round_num=round_num,
         )
         return response if isinstance(response, dict) else {"result": response}
 
@@ -343,9 +351,13 @@ class SequentialCommunicationProtocol(BaseCommunicationProtocol):
         agent_context,
         environment,
         iteration: int,
+        round_num: Optional[int] = None,
     ):
         """
         Handle a single agent's execution turn with retry logic.
+
+        ``round_num`` is the 1-based round within the execution phase; it is
+        forwarded to environment tools so they can apply per-round mechanics.
         """
         self.environment = environment
         self._ensure_environment_tools_initialized()
@@ -365,6 +377,7 @@ class SequentialCommunicationProtocol(BaseCommunicationProtocol):
             prompts=prompts,
             phase="execution",
             iteration=iteration,
+            round_num=round_num or 0,
         )
 
         self._log_blackboard_states(

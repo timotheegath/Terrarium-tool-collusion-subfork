@@ -251,10 +251,12 @@ class BaseAgent:
             external_tool_names = await self.client.get_external_tool_names()
 
             handler = None
+            is_env_handler = False
             if tool_name in blackboard_tool_names:
                 handler = self.communication_protocol.blackboard_handle_tool_call
             elif tool_name in available_env_tools:
                 handler = self.communication_protocol.environment_handle_tool_call
+                is_env_handler = True
             elif tool_name in all_env_tools:
                 result = {
                     "error": f"Tool '{tool_name}' is not available during the {self.current_phase} phase."
@@ -275,12 +277,18 @@ class BaseAgent:
                 )
 
             if handler is not None:
+                handler_kwargs: Dict[str, Any] = {}
+                if is_env_handler:
+                    # Forward the current round (None = no round tracking) so env
+                    # tools can apply per-round mechanics such as schedule caps.
+                    handler_kwargs["round_num"] = self.current_round or None
                 result = await handler(
                     tool_name,
                     self.current_agent_name,
                     tool_arguments,
                     phase=self.current_phase,
                     iteration=self.current_iteration,
+                    **handler_kwargs,
                 )
 
             if (
