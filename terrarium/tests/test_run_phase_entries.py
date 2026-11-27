@@ -43,13 +43,14 @@ class _SequentialProtocol:
         return {"phase": "planning", "agent_name": agent_name}
 
     async def agent_execution_turn(
-        self, agent, agent_name, agent_context, environment, iteration
+        self, agent, agent_name, agent_context, environment, iteration, round_num=None
     ):
         self.calls.append(
             {
                 "method": "execution",
                 "agent_name": agent_name,
                 "iteration": iteration,
+                "round_num": round_num,
                 "agent_context": agent_context,
             }
         )
