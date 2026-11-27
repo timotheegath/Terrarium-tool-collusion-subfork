@@ -96,3 +96,29 @@ def instantiate_environment_tools(
     except TypeError:
         # Backward compatibility for tool classes that still use the old ctor.
         return cls(blackboard_manager)
+
+
+def call_env_tool(
+    env_tools: Any,
+    tool_name: str,
+    agent_name: str,
+    arguments: Dict[str, Any],
+    phase: Optional[str] = None,
+    iteration: Optional[int] = None,
+    round_num: Optional[int] = None,
+) -> Any:
+    """Call an environment tool handler, forwarding ``round_num`` only if supported.
+
+    Tool classes that accept a ``round_num`` parameter (e.g. HospitalTools) receive
+    the current round so they can apply per-round mechanics; older tool classes
+    keep their original signature and are called without it.
+    """
+    try:
+        params = inspect.signature(env_tools.handle_tool_call).parameters
+    except (TypeError, ValueError):
+        params = {}
+    if round_num is not None and "round_num" in params:
+        return env_tools.handle_tool_call(
+            tool_name, agent_name, arguments, phase, iteration, round_num=round_num
+        )
+    return env_tools.handle_tool_call(tool_name, agent_name, arguments, phase, iteration)

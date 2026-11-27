@@ -936,10 +936,14 @@ async def run_phase_entries(
     run, its protocol return value is stored under ``result``. The turn is
     dispatched to the communication protocol: a generic ``agent_turn`` method
     when the protocol defines one, otherwise ``agent_planning_turn`` for the
-    ``"planning"`` phase and ``agent_execution_turn`` for every other phase.
-    Every turn's context is built with ``build_agent_context(..., round_number=round)``,
-    so environments and prompts can read the round from ``agent_context["round_number"]``
+    ``"planning"`` phase and ``agent_execution_turn`` for every other phase
+    (both receive the round as ``round_num``). Every turn's context is built
+    with ``build_agent_context(..., round_number=round)``, so environments and
+    prompts can read the round from ``agent_context["round_number"]``
     for any phase, not just planning.
+
+    A phase entry may also set ``"shuffle_agents": True`` to draw a fresh random
+    agent order (from the seeded global RNG) at the start of each of its rounds.
 
     Args:
         phase_entries: Phase entries to run, e.g.
@@ -1033,6 +1037,7 @@ async def run_phase_entries(
                         turn["agent_context"],
                         environment,
                         iteration,
+                        round_num=turn["round"],
                     )
                 turn["result"] = result
                 if on_turn is not None:

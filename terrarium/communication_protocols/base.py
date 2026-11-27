@@ -25,6 +25,7 @@ class BaseCommunicationProtocol(ABC):
         *,
         phase: Optional[str] = None,
         iteration: Optional[int] = None,
+        round_num: Optional[int] = None,
     ) -> Dict[str, Any]:
         raise NotImplementedError
 
@@ -82,5 +83,6 @@ class BaseCommunicationProtocol(ABC):
         agent_context: Any,
         environment: Any,
         iteration: int,
+        round_num: Optional[int] = None,
     ) -> None:
         raise NotImplementedError

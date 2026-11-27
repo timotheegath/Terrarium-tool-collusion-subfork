@@ -8,6 +8,7 @@ from terrarium.core.blackboard import Megaboard, format_blackboard_events_for_pr
 from terrarium.communication_protocols.base import BaseCommunicationProtocol
 from terrarium.tools.environment import (
     EnvironmentToolsNotFoundError,
+    call_env_tool,
     instantiate_environment_tools,
 )
 
@@ -224,6 +225,7 @@ class LocalCommunicationProtocol(BaseCommunicationProtocol):
         *,
         phase: Optional[str] = None,
         iteration: Optional[int] = None,
+        round_num: Optional[int] = None,
     ) -> Dict[str, Any]:
         policy = self.active_phase_policy(phase)
         if policy is not None and policy.block_environment_tool_calls:
@@ -282,12 +284,14 @@ class LocalCommunicationProtocol(BaseCommunicationProtocol):
         # A tool can raise after mutating state; catch it here (with the same result
         # BaseAgent would build) so the call is still recorded and secret boards scrubbed.
         try:
-            response = env_tools.handle_tool_call(
+            response = call_env_tool(
+                env_tools,
                 tool_name,
                 agent_name,
                 arguments,
                 phase=phase,
                 iteration=iteration,
+                round_num=round_num,
             )
         except Exception as exc:
             logger.exception("Environment tool %s raised", tool_name)
@@ -472,7 +476,12 @@ class LocalCommunicationProtocol(BaseCommunicationProtocol):
                 )
             if phase == "execution":
                 return await self.agent_execution_turn(
-                    agent, agent_name, agent_context, environment, iteration
+                    agent,
+                    agent_name,
+                    agent_context,
+                    environment,
+                    iteration,
+                    round_num=round_num,
                 )
             return await self.agent_planning_turn(
                 agent,
@@ -530,6 +539,7 @@ class LocalCommunicationProtocol(BaseCommunicationProtocol):
         agent_context: Any,
         environment: Any,
         iteration: int,
+        round_num: Optional[int] = None,
     ) -> Dict[str, Any]:
         self.environment = environment
         self.current_planning_round = None
@@ -547,7 +557,7 @@ class LocalCommunicationProtocol(BaseCommunicationProtocol):
             prompts=prompts,
             phase="execution",
             iteration=iteration,
-            round_num=0,
+            round_num=round_num or 0,
         )
 
     async def agent_survey_turn(
